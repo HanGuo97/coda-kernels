@@ -1,7 +1,7 @@
 # CODA
 
 <p align="center">
-  <img src="figs/icon.png" width="200" />
+  <img src="figs/icon.jpg" width="200" />
 </p>
 
 **CODA** is a GPU kernel abstraction that expresses memory-bound Transformer computations as GEMM-plus-epilogue programs, eliminating intermediate global memory traffic by fusing surrounding operators into the GEMM tile while it remains on chip.
