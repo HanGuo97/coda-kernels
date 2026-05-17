@@ -1,0 +1,27 @@
+torch
+einops
+jaxtyping
+transformers
+datasets
+lightning
+rich
+hydra-core
+wandb
+evaluate
+jupyterlab >= 4.4.5
+matplotlib
+ipdb
+Jinja2
+pytest
+sphinx
+myst-parser
+nbsphinx
+nbsphinx-link
+sphinx-copybutton
+sphinx-inline-tabs
+cuda-python==12.9.5
+flash-linear-attention
+flashinfer-python
+liger-kernel
+packaging
+ninja
