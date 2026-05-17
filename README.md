@@ -1,8 +1,10 @@
 # CODA
 
-**CODA** is a GPU kernel abstraction that expresses memory-bound Transformer computations as GEMM-plus-epilogue programs, eliminating intermediate global memory traffic by fusing surrounding operators into the GEMM tile while it remains on chip.
+<p align="center">
+  <img src="figs/icon.png" width="200" />
+</p>
 
----
+**CODA** is a GPU kernel abstraction that expresses memory-bound Transformer computations as GEMM-plus-epilogue programs, eliminating intermediate global memory traffic by fusing surrounding operators into the GEMM tile while it remains on chip.
 
 ## The Problem
 
@@ -19,13 +21,9 @@ CODA reparameterizes these operators as **GEMM epilogues** — computations that
 
 Composing these covers nearly all non-attention computation in a standard Transformer block, in both forward and backward passes.
 
----
-
 ## Naming
 
 The project was originally named **Rapier** (because it is built on CUTLASS). The name was later changed to **CODA**. The infrastructure library in `rapier/` retains its original name.
-
----
 
 ## Repository Structure
 
@@ -85,4 +83,3 @@ Rapier is the library that implements the GEMM-plus-epilogue abstraction on top 
 | `composite` | Chains multiple visitors into a single unified epilogue |
 
 **Utilities (`rapier/ops/`)** — tensor allocation in register/shared memory, TMA descriptor creation, hierarchical reductions, dtype conversion, layout construction, pipeline state management, profiling, and benchmarking.
-
