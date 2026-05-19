@@ -87,6 +87,7 @@ def benchmark_layer(
     sin_liger  = rearrange(sin, "1 t 1 d -> t d")
     cos_finfer = cos_liger.float()
     sin_finfer = sin_liger.float()
+    cos_sin_finfer = torch.cat([cos_finfer, sin_finfer], dim=-1).contiguous()
     positions  = torch.arange(seq_length, device="cuda").repeat(batch_size)
 
     w0 = torch.randn_like(block.proj_out   .weight) / math.sqrt(block.proj_out   .in_features)
@@ -145,6 +146,13 @@ def benchmark_layer(
     )
     # trainstation outputs in different order
     grad_outputs_human = (grad_outputs[1], grad_outputs[0])
+    # liger outputs (x, Q, K, V)
+    grad_outputs_qkv = (
+        torch.randn((batch_size, seq_length, w2t.shape[1]     ), dtype=dtype, device="cuda"),
+        torch.randn((batch_size, seq_length, w3t.shape[1] // 3), dtype=dtype, device="cuda"),
+        torch.randn((batch_size, seq_length, w3t.shape[1] // 3), dtype=dtype, device="cuda"),
+        torch.randn((batch_size, seq_length, w3t.shape[1] // 3), dtype=dtype, device="cuda"),
+    )
 
     fn0 = None
     fn0_compile = None
@@ -158,6 +166,8 @@ def benchmark_layer(
     fn_liger2_compile = None
     fn_finfer = None
     fn_finfer_compile = None
+    fn_finfer2 = None
+    fn_finfer2_compile = None
     fn_torch = None
     fn_torch_transpose = None
 
@@ -249,6 +259,7 @@ def benchmark_layer(
             wn1=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             eps=1e-6,
             transpose=False,
@@ -266,6 +277,7 @@ def benchmark_layer(
             wn1=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             eps=1e-6,
             transpose=False,
@@ -283,6 +295,7 @@ def benchmark_layer(
             wn1=wn1,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             eps=1e-6,
             transpose=False,
@@ -300,10 +313,47 @@ def benchmark_layer(
             wn1=wn1,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             eps=1e-6,
             transpose=False,
             backend="flashinfer",
+            use_compile=True,
+        )
+        fn_finfer2 = lambda: ops2.layer(
+            x0=x0,
+            y0=y0,
+            w0=w0t,
+            w1=w1t,
+            w2=w2t,
+            w3=w3t,
+            wn0=wn0,
+            wn1=wn1,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
+            eps=1e-6,
+            transpose=False,
+            backend="flashinfer2",
+            use_compile=False,
+        )
+        fn_finfer2_compile = lambda: ops2.layer(
+            x0=x0,
+            y0=y0,
+            w0=w0t,
+            w1=w1t,
+            w2=w2t,
+            w3=w3t,
+            wn0=wn0,
+            wn1=wn1,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
+            eps=1e-6,
+            transpose=False,
+            backend="flashinfer2",
             use_compile=True,
         )
         fn_torch = lambda: ops2.layer(
@@ -317,6 +367,7 @@ def benchmark_layer(
             wn1=wn1,
             cos=cos,
             sin=sin,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             eps=1e-6,
             transpose=False,
@@ -426,6 +477,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -443,6 +495,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -460,6 +513,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -477,6 +531,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -494,6 +549,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos,
                 sin=sin,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -511,6 +567,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos,
                 sin=sin,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -532,25 +589,25 @@ def benchmark_layer(
             fn_liger = lambda: torch.autograd.grad(
                 outputs=outs_liger,
                 inputs=grad_inputs_t,
-                grad_outputs=grad_outputs,
+                grad_outputs=grad_outputs_qkv,
                 retain_graph=True,
             )
             fn_liger_compile = lambda: torch.autograd.grad(
                 outputs=outs_liger_compile,
                 inputs=grad_inputs_t,
-                grad_outputs=grad_outputs,
+                grad_outputs=grad_outputs_qkv,
                 retain_graph=True,
             )
             fn_liger_transpose = lambda: torch.autograd.grad(
                 outputs=outs_liger_transpose,
                 inputs=grad_inputs,
-                grad_outputs=grad_outputs,
+                grad_outputs=grad_outputs_qkv,
                 retain_graph=True,
             )
             fn_liger_compile_transpose = lambda: torch.autograd.grad(
                 outputs=outs_liger_compile_transpose,
                 inputs=grad_inputs,
-                grad_outputs=grad_outputs,
+                grad_outputs=grad_outputs_qkv,
                 retain_graph=True,
             )
             fn_torch = lambda: torch.autograd.grad(
@@ -671,6 +728,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -678,7 +736,7 @@ def benchmark_layer(
                 use_compile=False,
             ),
             inputs=grad_inputs_t,
-            grad_outputs=grad_outputs,
+            grad_outputs=grad_outputs_qkv,
         )
         fn_liger_compile = lambda: torch.autograd.grad(
             outputs=ops2.layer(
@@ -692,6 +750,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -699,7 +758,7 @@ def benchmark_layer(
                 use_compile=True,
             ),
             inputs=grad_inputs_t,
-            grad_outputs=grad_outputs,
+            grad_outputs=grad_outputs_qkv,
         )
         fn_liger_transpose = lambda: torch.autograd.grad(
             outputs=ops2.layer(
@@ -713,6 +772,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -720,7 +780,7 @@ def benchmark_layer(
                 use_compile=False,
             ),
             inputs=grad_inputs,
-            grad_outputs=grad_outputs,
+            grad_outputs=grad_outputs_qkv,
         )
         fn_liger_compile_transpose = lambda: torch.autograd.grad(
             outputs=ops2.layer(
@@ -734,6 +794,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos_liger,
                 sin=sin_liger,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -741,7 +802,7 @@ def benchmark_layer(
                 use_compile=True,
             ),
             inputs=grad_inputs,
-            grad_outputs=grad_outputs,
+            grad_outputs=grad_outputs_qkv,
         )
         fn_torch = lambda: torch.autograd.grad(
             outputs=ops2.layer(
@@ -755,6 +816,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos,
                 sin=sin,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=False,
@@ -776,6 +838,7 @@ def benchmark_layer(
                 wn1=wn1_g,
                 cos=cos,
                 sin=sin,
+                cos_sin=cos_sin_finfer,
                 positions=positions,
                 eps=1e-6,
                 transpose=True,
@@ -832,9 +895,10 @@ def benchmark_layer(
             w_a=w0t,
             w_b=w1t,
             w_n=wn0,
-            cos=None,
-            sin=None,
-            positions=None,
+            cos=cos_liger,
+            sin=sin_liger,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
             targets=None,
             eps=1e-6,
             epilogue=None,
@@ -848,9 +912,10 @@ def benchmark_layer(
             w_a=w0t,
             w_b=w1t,
             w_n=wn0,
-            cos=None,
-            sin=None,
-            positions=None,
+            cos=cos_liger,
+            sin=sin_liger,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
             targets=None,
             eps=1e-6,
             epilogue=None,
@@ -864,9 +929,10 @@ def benchmark_layer(
             w_a=w0t,
             w_b=w1t,
             w_n=wn0,
-            cos=None,
-            sin=None,
-            positions=None,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
             targets=None,
             eps=1e-6,
             epilogue=None,
@@ -880,9 +946,10 @@ def benchmark_layer(
             w_a=w0t,
             w_b=w1t,
             w_n=wn0,
-            cos=None,
-            sin=None,
-            positions=None,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
             targets=None,
             eps=1e-6,
             epilogue=None,
@@ -896,9 +963,10 @@ def benchmark_layer(
             w_a=w0t,
             w_b=w1t,
             w_n=wn0,
-            cos=None,
-            sin=None,
-            positions=None,
+            cos=cos,
+            sin=sin,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
             targets=None,
             eps=1e-6,
             epilogue=None,
@@ -955,6 +1023,7 @@ def benchmark_layer(
             w_n=wn0,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -971,6 +1040,7 @@ def benchmark_layer(
             w_n=wn0,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -987,6 +1057,7 @@ def benchmark_layer(
             w_n=wn0,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1003,6 +1074,7 @@ def benchmark_layer(
             w_n=wn0,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1019,6 +1091,7 @@ def benchmark_layer(
             w_n=wn0,
             cos=cos,
             sin=sin,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1087,6 +1160,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1103,6 +1177,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1119,6 +1194,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1135,12 +1211,47 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_finfer,
             sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
             epilogue="rope",
             transpose=False,
             backend="flashinfer",
+            use_compile=True,
+        )
+        fn_finfer2 = lambda: ops2.gemm_residual_rmsnorm_gemm(
+            x=x1,
+            y=y1,
+            w_a=w2t,
+            w_b=w3t,
+            w_n=wn1,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
+            targets=targets,
+            eps=1e-6,
+            epilogue="rope",
+            transpose=False,
+            backend="flashinfer2",
+            use_compile=False,
+        )
+        fn_finfer2_compile = lambda: ops2.gemm_residual_rmsnorm_gemm(
+            x=x1,
+            y=y1,
+            w_a=w2t,
+            w_b=w3t,
+            w_n=wn1,
+            cos=cos_finfer,
+            sin=sin_finfer,
+            cos_sin=cos_sin_finfer,
+            positions=positions,
+            targets=targets,
+            eps=1e-6,
+            epilogue="rope",
+            transpose=False,
+            backend="flashinfer2",
             use_compile=True,
         )
         fn_torch = lambda: ops2.gemm_residual_rmsnorm_gemm(
@@ -1151,6 +1262,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos,
             sin=sin,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1220,6 +1332,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1237,6 +1350,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1253,6 +1367,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1269,6 +1384,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos_liger,
             sin=sin_liger,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1285,6 +1401,7 @@ def benchmark_layer(
             w_n=wn1,
             cos=cos,
             sin=sin,
+            cos_sin=cos_sin_finfer,
             positions=positions,
             targets=targets,
             eps=1e-6,
@@ -1327,6 +1444,8 @@ def benchmark_layer(
             "liger2-compile": fn_liger2_compile,
             "finfer": fn_finfer,
             "finfer-compile": fn_finfer_compile,
+            "finfer2": fn_finfer2,
+            "finfer2-compile": fn_finfer2_compile,
             "torch": fn_torch,
             "torch-transpose": fn_torch_transpose,
         }
@@ -1488,9 +1607,14 @@ def benchmark_block_shapes(
     dtype: torch.dtype,
     warmup: int,
     repeats: int,
+    bench_rapier: bool,
 ) -> list[dict[str, dict]]:
 
     all_results = []
+    if bench_rapier:
+        suffix = "rapier"
+    else:
+        suffix = "other"
     for i in range(num + 1):
         print(f"Iteration {i}/{num}")
 
@@ -1505,18 +1629,16 @@ def benchmark_block_shapes(
             "fwd-cross-entropy",
         ]:
             for size in [8192, 4096, 2048]:
-                for bench_rapier in [True, False]:
-                    suffix = "rapier" if bench_rapier else "other"
-                    results_dict[f"{name}-{size}-{suffix}"] = benchmark_layer(
-                        name=name,
-                        config=ALL_CONFIGS[size](),
-                        batch_size=batch_size,
-                        seq_length=seq_length,
-                        dtype=dtype,
-                        warmup=warmup,
-                        repeats=repeats,
-                        bench_rapier=bench_rapier,
-                    )
+                results_dict[f"{name}-{size}-{suffix}"] = benchmark_layer(
+                    name=name,
+                    config=ALL_CONFIGS[size](),
+                    batch_size=batch_size,
+                    seq_length=seq_length,
+                    dtype=dtype,
+                    warmup=warmup,
+                    repeats=repeats,
+                    bench_rapier=bench_rapier,
+                )
 
         if i == 0:
             time.sleep(60)
@@ -1530,6 +1652,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num", type=int, required=True)
     parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--bench-rapier", action="store_true")
     args = parser.parse_args()
 
     DEFAULT_BATCH_SIZE = 2
@@ -1545,5 +1668,6 @@ if __name__ == "__main__":
         dtype=DEFAULT_DTYPE,
         warmup=DEFAULT_WARMUP,
         repeats=DEFAULT_REPEATS,
+        bench_rapier=args.bench_rapier,
     )
     torch.save(results, args.output)

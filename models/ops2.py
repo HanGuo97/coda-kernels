@@ -7,7 +7,6 @@ from liger_kernel.ops.rope import _triton_rope
 from liger_kernel.ops import cross_entropy as liger_cross_entropy_ops
 from liger_kernel.ops import fused_linear_cross_entropy as liger_fused_linear_cross_entropy_ops
 from liger_kernel.transformers import functional as liger_functional
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 from kernels.refs.gpt2 import gemm_rmsnorm
 
@@ -203,8 +202,6 @@ def rope(
 class SwiGLUFunction(torch.autograd.Function):
 
     @staticmethod
-    @input_guard
-    @autocast_custom_fwd
     def forward(
         ctx,
         g: torch.Tensor,
@@ -214,8 +211,6 @@ class SwiGLUFunction(torch.autograd.Function):
         return torch.nn.functional.silu(g) * u
 
     @staticmethod
-    @input_guard
-    @autocast_custom_bwd
     def backward(
         ctx,
         dout: torch.Tensor,
@@ -231,8 +226,6 @@ class SwiGLUFunction(torch.autograd.Function):
 class RoPEFunction(torch.autograd.Function):
 
     @staticmethod
-    @input_guard
-    @autocast_custom_fwd
     def forward(
         ctx,
         y: torch.Tensor,
@@ -243,8 +236,6 @@ class RoPEFunction(torch.autograd.Function):
         return rope(y=y, cos=cos, sin=sin)
 
     @staticmethod
-    @input_guard
-    @autocast_custom_bwd
     def backward(
         ctx,
         dout: torch.Tensor,
@@ -310,19 +301,32 @@ def rope_forward_liger_(
 def rope_forward_flashinfer_(
     q: torch.Tensor,
     k: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    cos_sin = torch.cat([cos, sin], dim=-1)
     flashinfer.rope.apply_rope_with_cos_sin_cache_inplace(
         positions=positions,
         query=q,
         key=k,
-        head_size=cos.shape[-1] * 2,
+        head_size=cos_sin.shape[-1],
         cos_sin_cache=cos_sin,
     )
     return q, k
+
+
+def rope_forward_flashinfer2(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos_sin: torch.Tensor,
+    positions: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return flashinfer.rope.apply_rope_with_cos_sin_cache(
+        positions=positions,
+        query=q,
+        key=k,
+        head_size=cos_sin.shape[-1],
+        cos_sin_cache=cos_sin,
+    )
 
 
 def _gemm_rmsnorm_swiglu(
@@ -505,9 +509,10 @@ def _gemm_rope(
     B: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
     backend: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     D = torch.mm(A, B)
     Q, K, V = torch.tensor_split(D, 3, dim=-1)
 
@@ -515,12 +520,15 @@ def _gemm_rope(
         Q, K = rope_forward_liger_(Q, K, cos=cos, sin=sin)
 
     elif backend == "flashinfer":
-        Q, K = rope_forward_flashinfer_(Q, K, cos=cos, sin=sin, positions=positions)
+        Q, K = rope_forward_flashinfer_(Q, K, cos_sin=cos_sin, positions=positions)
+
+    elif backend == "flashinfer2":
+        Q, K = rope_forward_flashinfer2(Q, K, cos_sin=cos_sin, positions=positions)
 
     else:
         raise NotImplementedError
 
-    O = torch.cat([Q, K, V], dim=-1)
+    O = (Q, K, V)
     return D, O
 
 
@@ -541,14 +549,15 @@ def gemm_rope(
     B: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
     backend: str,
     use_compile: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     if not use_compile:
         fn = _gemm_rope
     else:
-        if backend == "flashinfer":
+        if backend in ("flashinfer", "flashinfer2"):
             fn = _gemm_rope_compiled_nofullgraph
         else:
             fn = _gemm_rope_compiled
@@ -557,6 +566,7 @@ def gemm_rope(
         B=B,
         cos=cos,
         sin=sin,
+        cos_sin=cos_sin,
         positions=positions,
         backend=backend,
     )
@@ -568,9 +578,10 @@ def _gemm_rmsnorm_rope(
     R: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
     backend: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     D = gemm_rmsnorm(A=A, B=B, R=R)
     Q, K, V = torch.tensor_split(D, 3, dim=-1)
 
@@ -578,12 +589,15 @@ def _gemm_rmsnorm_rope(
         Q, K = rope_forward_liger_(Q, K, cos=cos, sin=sin)
 
     elif backend == "flashinfer":
-        Q, K = rope_forward_flashinfer_(Q, K, cos=cos, sin=sin, positions=positions)
+        Q, K = rope_forward_flashinfer_(Q, K, cos_sin=cos_sin, positions=positions)
+
+    elif backend == "flashinfer2":
+        Q, K = rope_forward_flashinfer2(Q, K, cos_sin=cos_sin, positions=positions)
 
     else:
         raise NotImplementedError
 
-    O = torch.cat([Q, K, V], dim=-1)
+    O = (Q, K, V)
     return D, O
 
 
@@ -605,14 +619,15 @@ def gemm_rmsnorm_rope(
     R: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
     backend: str,
     use_compile: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     if not use_compile:
         fn = _gemm_rmsnorm_rope
     else:
-        if backend == "flashinfer":
+        if backend in ("flashinfer", "flashinfer2"):
             fn = _gemm_rmsnorm_rope_compiled_nofullgraph
         else:
             fn = _gemm_rmsnorm_rope_compiled
@@ -622,6 +637,7 @@ def gemm_rmsnorm_rope(
         R=R,
         cos=cos,
         sin=sin,
+        cos_sin=cos_sin,
         positions=positions,
         backend=backend,
     )
@@ -689,6 +705,7 @@ def _gemm_residual_rmsnorm_gemm(
     w_n: torch.Tensor,
     cos: torch.Tensor | None,
     sin: torch.Tensor | None,
+    cos_sin: torch.Tensor | None,
     positions: torch.Tensor | None,
     targets: torch.Tensor | None,
     eps: float,
@@ -734,7 +751,7 @@ def _gemm_residual_rmsnorm_gemm(
             z = torch.mm(y, w_a)
         h, x_out = liger_functional.liger_fused_add_rms_norm(X=z, R=x, W=w_n, eps=eps)
 
-    elif backend == "flashinfer":
+    elif backend in ("flashinfer", "flashinfer2"):
         if transpose:
             z = torch.nn.functional.linear(y, w_a)
         else:
@@ -772,7 +789,7 @@ def _gemm_residual_rmsnorm_gemm(
             g, u = torch.tensor_split(z_out, 2, dim=-1)
             y_out = liger_ops.LigerSiLUMulFunction.apply(g, u)
 
-        elif backend == "flashinfer":
+        elif backend in ("flashinfer", "flashinfer2"):
             y_out = flashinfer.activation.silu_and_mul(z_out)
 
         else:
@@ -785,6 +802,7 @@ def _gemm_residual_rmsnorm_gemm(
 
         if backend == "torch":
             y_out = RoPEFunction.apply(z_out, cos, sin)
+            y_out = rearrange(y_out, "(b t) d -> b t d", b=B, t=T, d=D2)
 
         elif backend in ("liger", "liger2"):
             cos = rearrange(cos, "t d -> 1 t d")
@@ -793,19 +811,34 @@ def _gemm_residual_rmsnorm_gemm(
             qt = rearrange(q, "(b t) (h d) -> b h t d", t=cos.shape[1], d=cos.shape[2] * 2)
             kt = rearrange(k, "(b t) (h d) -> b h t d", t=cos.shape[1], d=cos.shape[2] * 2)
             qt, kt = liger_ops.LigerRopeFunction.apply(qt, kt, cos, sin)
-            q = rearrange(qt, "b h t d -> (b t) (h d)", t=cos.shape[1], d=cos.shape[2] * 2)
-            k = rearrange(kt, "b h t d -> (b t) (h d)", t=cos.shape[1], d=cos.shape[2] * 2)
-            y_out = torch.cat([q, k, v], dim=-1)
+            q = rearrange(qt, "b h t d -> b t (h d)", t=cos.shape[1], d=cos.shape[2] * 2)
+            k = rearrange(kt, "b h t d -> b t (h d)", t=cos.shape[1], d=cos.shape[2] * 2)
+            y_out = (
+                q,
+                k,
+                rearrange(v, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+            )
 
         elif backend == "flashinfer":
             q, k, v = torch.tensor_split(z_out, 3, dim=-1)
-            q, k = rope_forward_flashinfer_(q, k, cos=cos, sin=sin, positions=positions)
-            y_out = torch.cat([q, k, v], dim=-1)
+            q, k = rope_forward_flashinfer_(q, k, cos_sin=cos_sin, positions=positions)
+            y_out = (
+                rearrange(q, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+                rearrange(k, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+                rearrange(v, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+            )
+
+        elif backend == "flashinfer2":
+            q, k, v = torch.tensor_split(z_out, 3, dim=-1)
+            q, k = rope_forward_flashinfer2(q, k, cos_sin=cos_sin, positions=positions)
+            y_out = (
+                rearrange(q, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+                rearrange(k, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+                rearrange(v, "(b t) d -> b t d", b=B, t=T, d=D2 // 3),
+            )
 
         else:
             raise NotImplementedError
-
-        y_out = rearrange(y_out, "(b t) d -> b t d", b=B, t=T, d=D2)
 
     elif epilogue == "cross-entropy":
         targets = rearrange(targets, "b t -> (b t)", b=B, t=T)
@@ -854,6 +887,7 @@ def gemm_residual_rmsnorm_gemm(
     w_n: torch.Tensor,
     cos: torch.Tensor | None,
     sin: torch.Tensor | None,
+    cos_sin: torch.Tensor | None,
     positions: torch.Tensor | None,
     targets: torch.Tensor | None,
     eps: float,
@@ -870,7 +904,7 @@ def gemm_residual_rmsnorm_gemm(
     if not use_compile:
         fn = _gemm_residual_rmsnorm_gemm
     else:
-        if backend == "flashinfer":
+        if backend in ("flashinfer", "flashinfer2"):
             fn = _gemm_residual_rmsnorm_gemm_compiled_nofullgraph
         else:
             fn = _gemm_residual_rmsnorm_gemm_compiled
@@ -882,6 +916,7 @@ def gemm_residual_rmsnorm_gemm(
         w_n=w_n,
         cos=cos,
         sin=sin,
+        cos_sin=cos_sin,
         positions=positions,
         targets=targets,
         eps=eps,
@@ -902,12 +937,13 @@ def layer(
     wn1: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
+    cos_sin: torch.Tensor,
     positions: torch.Tensor,
     eps: float,
     transpose: bool,
     backend: str,
     use_compile: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, ...]:
     x1, y1, _, _, _ = gemm_residual_rmsnorm_gemm(
         x=x0,
         y=y0,
@@ -916,6 +952,7 @@ def layer(
         w_n=wn0,
         cos=None,
         sin=None,
+        cos_sin=None,
         positions=None,
         targets=None,
         eps=eps,
@@ -932,6 +969,7 @@ def layer(
         w_n=wn1,
         cos=cos,
         sin=sin,
+        cos_sin=cos_sin,
         positions=positions,
         targets=None,
         eps=eps,
@@ -940,4 +978,8 @@ def layer(
         backend=backend,
         use_compile=use_compile,
     )
-    return x2, y2
+    if backend == "torch":
+        return x2, y2
+    else:
+        q, k, v = y2
+        return x2, q, k, v

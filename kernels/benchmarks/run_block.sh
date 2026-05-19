@@ -13,8 +13,13 @@ echo "OUTPUT_DIR=${OUTPUT_DIR}"
 
 python -m kernels.benchmarks.block \
     --num "${NUM}" \
-    --output "${OUTPUT_DIR}/block.pth"
+    --bench-rapier \
+    --output "${OUTPUT_DIR}/block-rapier.pth"
 
 python -m kernels.benchmarks.gemm \
     --num "${NUM}" \
     --output "${OUTPUT_DIR}/gemm.pth"
+
+python -m kernels.benchmarks.block \
+    --num "${NUM}" \
+    --output "${OUTPUT_DIR}/block-other.pth"

@@ -311,6 +311,13 @@ def benchmark_gemm_rmsnorm_rope(
         dtype=dtype,
         rope=True,
     )
+    cos_sin_finfer = torch.cat(
+        [
+            inputs_ref_fp32["cos"],
+            inputs_ref_fp32["sin"],
+        ],
+        dim=-1,
+    ).contiguous()
     fn_dict = {
         "rapier": lambda: gens.gemm_rmsnorm_rope(
             A=inputs["A"],
@@ -340,6 +347,7 @@ def benchmark_gemm_rmsnorm_rope(
             R=inputs_ref["R"],
             cos=inputs_ref["cos"],
             sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="liger",
             use_compile=False,
@@ -350,6 +358,7 @@ def benchmark_gemm_rmsnorm_rope(
             R=inputs_ref["R"],
             cos=inputs_ref["cos"],
             sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="liger",
             use_compile=True,
@@ -358,9 +367,9 @@ def benchmark_gemm_rmsnorm_rope(
             A=inputs_ref["A"],
             B=inputs_ref["B"],
             R=inputs_ref["R"],
-            # flashinfer requires cos/sin to be in FP32
-            cos=inputs_ref_fp32["cos"],
-            sin=inputs_ref_fp32["sin"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="flashinfer",
             use_compile=False,
@@ -369,11 +378,33 @@ def benchmark_gemm_rmsnorm_rope(
             A=inputs_ref["A"],
             B=inputs_ref["B"],
             R=inputs_ref["R"],
-            # flashinfer requires cos/sin to be in FP32
-            cos=inputs_ref_fp32["cos"],
-            sin=inputs_ref_fp32["sin"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="flashinfer",
+            use_compile=True,
+        ),
+        "finfer2": lambda: ops2.gemm_rmsnorm_rope(
+            A=inputs_ref["A"],
+            B=inputs_ref["B"],
+            R=inputs_ref["R"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
+            positions=auxiliary["positions"],
+            backend="flashinfer2",
+            use_compile=False,
+        ),
+        "finfer2-compile": lambda: ops2.gemm_rmsnorm_rope(
+            A=inputs_ref["A"],
+            B=inputs_ref["B"],
+            R=inputs_ref["R"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
+            positions=auxiliary["positions"],
+            backend="flashinfer2",
             use_compile=True,
         ),
     }
@@ -604,6 +635,13 @@ def benchmark_gemm_rope(
         dtype=dtype,
         rope=True,
     )
+    cos_sin_finfer = torch.cat(
+        [
+            inputs_ref_fp32["cos"],
+            inputs_ref_fp32["sin"],
+        ],
+        dim=-1,
+    ).contiguous()
     fn_dict = {
         "rapier": lambda: gens.gemm_rope(
             A=inputs["A"],
@@ -630,6 +668,7 @@ def benchmark_gemm_rope(
             B=inputs_ref["B"],
             cos=inputs_ref["cos"],
             sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="liger",
             use_compile=False,
@@ -639,6 +678,7 @@ def benchmark_gemm_rope(
             B=inputs_ref["B"],
             cos=inputs_ref["cos"],
             sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="liger",
             use_compile=True,
@@ -646,9 +686,9 @@ def benchmark_gemm_rope(
         "finfer": lambda: ops2.gemm_rope(
             A=inputs_ref["A"],
             B=inputs_ref["B"],
-            # flashinfer requires cos/sin to be in FP32
-            cos=inputs_ref_fp32["cos"],
-            sin=inputs_ref_fp32["sin"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="flashinfer",
             use_compile=False,
@@ -656,11 +696,31 @@ def benchmark_gemm_rope(
         "finfer-compile": lambda: ops2.gemm_rope(
             A=inputs_ref["A"],
             B=inputs_ref["B"],
-            # flashinfer requires cos/sin to be in FP32
-            cos=inputs_ref_fp32["cos"],
-            sin=inputs_ref_fp32["sin"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
             positions=auxiliary["positions"],
             backend="flashinfer",
+            use_compile=True,
+        ),
+        "finfer2": lambda: ops2.gemm_rope(
+            A=inputs_ref["A"],
+            B=inputs_ref["B"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
+            positions=auxiliary["positions"],
+            backend="flashinfer2",
+            use_compile=False,
+        ),
+        "finfer2-compile": lambda: ops2.gemm_rope(
+            A=inputs_ref["A"],
+            B=inputs_ref["B"],
+            cos=inputs_ref["cos"],
+            sin=inputs_ref["sin"],
+            cos_sin=cos_sin_finfer,
+            positions=auxiliary["positions"],
+            backend="flashinfer2",
             use_compile=True,
         ),
     }
