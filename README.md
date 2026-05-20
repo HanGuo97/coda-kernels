@@ -12,10 +12,6 @@ Transformer training is dominated by matrix multiplications, but a significant f
 
 ## The Approach
 
-<p align="center">
-  <img src="figs/reparameterization.png" width="700" />
-</p>
-
 CODA reparameterizes these operators as **GEMM epilogues** — computations that run while the GEMM output tile is still in registers and shared memory, before it is written back to global memory. The GEMM mainloop is fixed; the surrounding work is expressed using a small set of composable primitives:
 
 - **Scaling** (e.g., RMS norm scale factors)
