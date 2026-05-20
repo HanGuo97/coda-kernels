@@ -12,9 +12,7 @@
   <img src="figs/reparameterization.png" width="700" />
 </p>
 
-> **A note on naming.** The implementation of CODA has historically been called **Rapier** — a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
-
-[PLACEHOLDER: performance figure(s)]
+> **A note on naming.** The implementation of CODA has historically been called **Rapier**, a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
 
 ## Installation
 
@@ -129,9 +127,9 @@ Per-tile and per-sub-tile state (smem views, register tensors) flows between the
 | `consumer_begin` | Once per CTA output tile: load per-tile inputs (e.g. an `R` column vector for RMS norm) from global to shared memory and produce partitioned smem views. |
 | `producer_begin` / `producer_tma_load` | Set up and drive the TMA producer pipeline for inputs loaded asynchronously per sub-tile (e.g. a residual matrix). No-ops by default. |
 | `consumer_begin_loop` | Per epilogue sub-tile: copy the relevant slice of smem into registers, ready to be combined with the accumulator. |
-| `consumer_visit` | **The core operation.** Mutates the accumulator register tile `tRS_rD` in place — this is where the actual elementwise / reduction math happens. Receives `tRS_rD` in accumulator dtype (typically fp32); the cast to output dtype happens afterwards in the mainloop. |
+| `consumer_visit` | **The core operation.** Mutates the accumulator register tile `tRS_rD` in place; this is where the actual elementwise / reduction math happens. Receives `tRS_rD` in accumulator dtype (typically fp32); the cast to output dtype happens afterwards in the mainloop. |
 | `consumer_smem_store` | Optional extra writes to shared memory after `tRS_rD` has been staged into smem but before the TMA store (e.g. writing partial reduction results). |
-| `consumer_tma_store` | Callback fired immediately after the mainloop TMA-stores the tile to global memory — useful for chaining additional global writes. |
+| `consumer_tma_store` | Callback fired immediately after the mainloop TMA-stores the tile to global memory; useful for chaining additional global writes. |
 | `consumer_end_loop` / `consumer_end` | Per sub-tile and per CTA-tile cleanup hooks. |
 
 ### Example: per-row scaling
@@ -203,11 +201,3 @@ coda-kernels/
 | `matrix` | TMA-pipelined matrix load with residual add; 2X paired-tile variant |
 | `cross_entropy` | Online softmax + target logit selection, fused into the output tile |
 | `composite` | Chains multiple visitors into a single unified epilogue |
-
-## Citation
-
-If you use CODA in your research, please cite:
-
-```bibtex
-[PLACEHOLDER: bibtex citation]
-```
