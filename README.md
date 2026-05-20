@@ -8,6 +8,10 @@
 
 **CODA** is a GPU kernel abstraction that expresses Transformer operators as GEMM-plus-epilogue programs, fusing normalization, activations, residual updates, and reductions into the GEMM output tile before it is written to global memory, combining framework-level productivity with hardware-level efficiency. CODA is built on [CUTLASS CuTeDSL](https://github.com/NVIDIA/cutlass) and targets NVIDIA Hopper (H100) GPUs.
 
+<p align="center">
+  <img src="figs/reparameterization.jpg" width="700" />
+</p>
+
 > **A note on naming.** The implementation of CODA has historically been called **Rapier** — a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
 
 [PLACEHOLDER: performance figure(s)]
