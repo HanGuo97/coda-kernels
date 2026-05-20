@@ -4,9 +4,11 @@
   <img src="figs/icon.svg" width="200" />
 </p>
 
-[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
+[![arXiv](https://img.shields.io/badge/arXiv-2605.19269-b31b1b.svg)](https://arxiv.org/abs/2605.19269)
 
 **CODA** is a GPU kernel abstraction that expresses Transformer operators as GEMM-plus-epilogue programs, fusing normalization, activations, residual updates, and reductions into the GEMM output tile before it is written to global memory, combining framework-level productivity with hardware-level efficiency. CODA is built on [CUTLASS CuTeDSL](https://github.com/NVIDIA/cutlass) and targets NVIDIA Hopper (H100) GPUs.
+
+> **A note on naming.** The implementation of CODA has historically been called **Rapier** — a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
 
 [PLACEHOLDER: performance figure(s)]
 
@@ -83,7 +85,7 @@ x_out, qkv = ops.layer(
     head_dim=head_dim,
     eps=1e-6,
     transpose=True,
-    backend="coda",
+    backend="rapier",
     use_compile=True,
 )
 ```
@@ -134,15 +136,28 @@ Per-tile and per-sub-tile state (smem views, register tensors) flows between the
 
 ```python
 @cute.jit
-def consumer_begin(self, ..., epi_tensors_smem):
-    # async-copy the R column vector for this CTA tile from gmem into smem
-    memory_utils.g2s_copy_1d(src=gColVec, dst=epi_tensors_smem.sColVec, ...)
-    return self.EpilogueTensors(tDsColVec=...)  # partitioned smem view
+def consumer_begin(self, ..., epi_params, epi_tensors_smem):
+    sColVec = epi_tensors_smem.sColVec
+    # take this CTA's slice of the global R vector, then async-copy gmem -> smem
+    gColVec = cute.local_tile(epi_params.mColVec, (tile_M,), (m_idx,))
+    memory_utils.g2s_copy_1d(src=gColVec, dst=sColVec, ...)
+    # broadcast the column along N (stride 0), then partition across threads
+    sColVec_view = cute.make_tensor(
+        sColVec.iterator,
+        cute.make_layout((tile_M, tile_N), stride=(1, 0)),
+    )
+    tDsColVec = partition_for_epilogue(sColVec_view)
+    # wait for cp.async, then sync the consumer warps
+    cute.arch.cp_async_commit_group()
+    cute.arch.cp_async_wait_group(0)
+    epi_barrier.arrive_and_wait()
+    return self.EpilogueTensors(tDsColVec=tDsColVec)
 
 @cute.jit
-def consumer_begin_loop(self, ..., epi_tensors):
-    # copy this sub-tile's slice of R from smem into registers (acc dtype)
-    tDrColVec_cvt = memory_utils.s2r_copy_1d(epi_tensors.tDsColVec_cur, dtype=self.acc_dtype)
+def consumer_begin_loop(self, ..., epi_coord, epi_tensors):
+    # select this sub-tile's slice of the smem view, then copy smem -> registers (acc dtype)
+    tDsColVec_cur = epi_tensors.tDsColVec[..., epi_coord]
+    tDrColVec_cvt = memory_utils.s2r_copy_1d(tDsColVec_cur, dtype=self.acc_dtype)
     return self.EpilogueTensorsLoop(tDrColVec_epi=tDrColVec_cvt), ...
 
 @cute.jit
