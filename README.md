@@ -1,7 +1,7 @@
 # CODA: GPU Kernels as GEMM-plus-Epilogue Programs
 
 <p align="center">
-  <img src="figs/icon.jpg" width="200" />
+  <img src="figs/icon.jpg" width="350" />
 </p>
 
 <p align="center">
