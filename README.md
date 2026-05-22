@@ -14,16 +14,6 @@
 
 > **A note on naming.** The implementation of CODA has historically been called **Rapier**, a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
 
-## Installation
-
-### Install from Source
-
-```bash
-git clone https://github.com/hanguo97/coda-kernels.git
-cd coda-kernels
-pip install -e .
-```
-
 ## Quick Start
 
 > [!NOTE]
