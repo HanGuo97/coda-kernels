@@ -27,7 +27,7 @@ pip install -e .
 ## Quick Start
 
 > [!NOTE]
-> CODA autotunes each kernel the first time it sees a new shape. Expect the initial call to take a while.
+> We autotune each kernel the first time it sees a new input configuration (shape, dtype, etc.), so the initial call may take a while.
 
 ### Kernel level
 
