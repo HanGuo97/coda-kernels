@@ -26,6 +26,9 @@ pip install -e .
 
 ## Quick Start
 
+> [!NOTE]
+> CODA autotunes each kernel the first time it sees a new shape. Expect the initial call to take a while.
+
 ### Kernel level
 
 Individual GEMM-plus-epilogue kernels are in `kernels/gens/epilogue/`. The base pattern for `gemm_residual_rmsnorm_gemm` (no extra epilogue) uses two kernels in sequence:
