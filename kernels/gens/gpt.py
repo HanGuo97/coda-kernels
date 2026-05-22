@@ -32,7 +32,7 @@ from kernels.gens.epilogue import (
     kernel_9,
 )
 
-USE_TUNED = False
+USE_TUNED = True
 
 
 def _kernel_op(
