@@ -8,19 +8,19 @@ from quack import cache_utils
 from quack import gemm_interface as quack_gemm
 from quack.autotuner import autotune, AutotuneConfig
 
-from rapier.examples.gemm import gemm_op
+from coda.core.examples.gemm import gemm_op
 
-from kernels.gens import gpt as gens
+from coda.kernels.gens import gpt as gens
 # `gpt2` is more optimized and less precise
-from kernels.refs import gpt2 as refs
-from kernels.tests import gpt as tests
+from coda.kernels.refs import gpt2 as refs
+from coda.kernels.tests import gpt as tests
 
-from models import ops
-from models import ops2
+from coda.models import ops
+from coda.models import ops2
 
-from kernels.benchmarks import quack_utils
-from kernels.benchmarks import trainstation_utils
-from kernels.benchmarks import bench_utils
+from coda.kernels.benchmarks import quack_utils
+from coda.kernels.benchmarks import trainstation_utils
+from coda.kernels.benchmarks import bench_utils
 
 cache_utils.CACHE_ENABLED = False
 torch._dynamo.config.capture_scalar_outputs = True

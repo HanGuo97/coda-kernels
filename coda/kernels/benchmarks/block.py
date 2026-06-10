@@ -10,18 +10,18 @@ from einops import rearrange
 from quack import cache_utils
 from dataclasses import dataclass
 
-from models import ops
-from models import ops2
-from models.gpt import (
+from coda.models import ops
+from coda.models import ops2
+from coda.models.gpt import (
     GPT,
     Block,
     BlockPost,
     preprocess_rope,
 )
 # just for the torch compile setting
-from kernels.tests import gpt as tests
-from kernels.benchmarks import trainstation_utils
-from kernels.benchmarks import bench_utils
+from coda.kernels.tests import gpt as tests
+from coda.kernels.benchmarks import trainstation_utils
+from coda.kernels.benchmarks import bench_utils
 
 cache_utils.CACHE_ENABLED = False
 torch._dynamo.config.capture_scalar_outputs = True

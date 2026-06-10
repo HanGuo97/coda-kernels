@@ -4,12 +4,12 @@ import cutlass.cute as cute
 from typing import Callable
 
 from quack.cute_dsl_utils import torch2cute_dtype_map
-from rapier.epilogue import (
+from coda.core.epilogue import (
     EVTList,
     EVTActivationWithDualOutputs,
     EpilogueVisitorTree,
 )
-from kernels.gens.epilogue.kernel_1 import EVTRMSNormScale
+from coda.kernels.gens.epilogue.kernel_1 import EVTRMSNormScale
 
 
 # SwiGLU: O = SiLU(G) * U where (G, U) are interleaved pairs from the accumulator.

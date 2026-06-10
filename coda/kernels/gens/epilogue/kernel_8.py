@@ -4,7 +4,7 @@ import cutlass.cute as cute
 from typing import Callable
 
 from quack.cute_dsl_utils import torch2cute_dtype_map
-from rapier.epilogue import (
+from coda.core.epilogue import (
     EVTActivationWithDualOutputs,
     EpilogueVisitorTree,
 )

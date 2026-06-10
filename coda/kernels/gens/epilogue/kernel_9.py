@@ -3,7 +3,7 @@ import cutlass
 import cutlass.cute as cute
 from typing import Callable
 
-from rapier.epilogue import (
+from coda.core.epilogue import (
     EVTList,
     EVTPartialCrossEntropy,
     EVTSelectLogits,
