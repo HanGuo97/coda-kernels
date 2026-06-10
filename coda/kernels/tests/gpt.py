@@ -3,7 +3,7 @@ import torch
 import pytest
 import cutlass.cute.testing as testing
 from einops import repeat, rearrange, reduce
-from rapier.ops import benchmark_utils
+from coda.core.ops import benchmark_utils
 
 from ..gens import gpt as gpt_gens
 from ..refs import gpt as gpt_refs

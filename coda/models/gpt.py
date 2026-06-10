@@ -2,12 +2,12 @@ import torch
 from einops import repeat, rearrange
 from flash_attn import flash_attn_func
 
-from models.gpt_ref import (
+from coda.models.gpt_ref import (
     GPTConfig,
     norm,
     round_up_to_next_multiple,
 )
-from models.ops import (
+from coda.models.ops import (
     layer,
     layer_pre,
     layer_post,

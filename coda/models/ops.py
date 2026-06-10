@@ -7,12 +7,12 @@ from quack.autotuner import autotune, AutotuneConfig
 from quack.cross_entropy import cross_entropy as quack_cross_entropy
 from quack.rms_final_reduce import rms_final_reduce as quack_rms_final_reduce
 
-from kernels.refs.gpt import rope as rope_interleaved
+from coda.kernels.refs.gpt import rope as rope_interleaved
 # `gpt2` is more optimized and less precise
-from kernels.refs import gpt2 as kernels_torch
-from kernels.gens import gpt as kernels_rapier
-from kernels.tests import gpt as kernels_rapier_test
-from kernels.benchmarks import trainstation_utils
+from coda.kernels.refs import gpt2 as kernels_torch
+from coda.kernels.gens import gpt as kernels_rapier
+from coda.kernels.tests import gpt as kernels_rapier_test
+from coda.kernels.benchmarks import trainstation_utils
 
 
 _KERNELS = {

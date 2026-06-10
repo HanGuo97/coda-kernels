@@ -3,7 +3,7 @@ import triton
 import functools
 from types import ModuleType
 from typing import Callable
-from rapier.gemm.gemm_interface import (
+from coda.core.gemm.gemm_interface import (
     DEFAULT_PINGPONG,
     DEFAULT_TILE_M,
     DEFAULT_TILE_N,
@@ -19,7 +19,7 @@ from rapier.gemm.gemm_interface import (
     preprocess_vector,
     preprocess_tensor,
 )
-from kernels.gens.epilogue import (
+from coda.kernels.gens.epilogue import (
     kernel_0,
     kernel_1,
     kernel_2,

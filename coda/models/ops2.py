@@ -8,7 +8,7 @@ from liger_kernel.ops import cross_entropy as liger_cross_entropy_ops
 from liger_kernel.ops import fused_linear_cross_entropy as liger_fused_linear_cross_entropy_ops
 from liger_kernel.transformers import functional as liger_functional
 
-from kernels.refs.gpt2 import gemm_rmsnorm
+from coda.kernels.refs.gpt2 import gemm_rmsnorm
 
 
 def liger_fused_linear_cross_entropy_forward(

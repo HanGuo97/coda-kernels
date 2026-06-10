@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import cast
 from einops import rearrange, reduce
 
-from models import ops
-from models import gpt
-from models import gpt_ref
-from kernels.benchmarks.block import GPTConfig2
+from coda.models import ops
+from coda.models import gpt
+from coda.models import gpt_ref
+from coda.kernels.benchmarks.block import GPTConfig2
 
 
 @dataclass
