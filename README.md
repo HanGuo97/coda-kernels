@@ -14,7 +14,6 @@
   <img src="figs/reparameterization.png" width="700" />
 </p>
 
-> **A note on naming.** The implementation of CODA has historically been called **Rapier**, a collection of GEMM-plus-epilogue primitives built on top of CuTeDSL. The name nods to CUTLASS: a slimmer, more focused blade of the same lineage, fitting for a constrained GEMM-plus-epilogue interface.
 
 ## Quick Start
 
@@ -23,12 +22,12 @@
 
 ### Kernel level
 
-Individual GEMM-plus-epilogue kernels are in `kernels/gens/epilogue/`. The base pattern for `gemm_residual_rmsnorm_gemm` (no extra epilogue) uses two kernels in sequence:
+Individual GEMM-plus-epilogue kernels are in `coda/kernels/gens/epilogue/`. The base pattern for `gemm_residual_rmsnorm_gemm` (no extra epilogue) uses two kernels in sequence:
 
 ```python
 import torch
-from kernels.gens import gpt as gens
-from models.ops import compute_rstd
+from coda.kernels.gens import gpt as gens
+from coda.models.ops import compute_rstd
 
 M, K, N = 4096, 4096, 4096
 dtype = torch.bfloat16
@@ -60,10 +59,10 @@ D, O = gens.gemm_rmsnorm_swiglu(A=O, B=w_b, R=R)
 
 ### Ops level
 
-`models/ops.py` provides high-level fused ops that cover full Transformer blocks (excluding attention). Each op represents a reparameterized Transformer layer, spanning from the attention output projection through the MLP to the QKV projection of the next layer.
+`coda/models/ops.py` provides high-level fused ops that cover full Transformer blocks (excluding attention). Each op represents a reparameterized Transformer layer, spanning from the attention output projection through the MLP to the QKV projection of the next layer.
 ```python
 import torch
-from models import ops
+from coda.models import ops
 
 # Forward pass through a Transformer block (excluding attention)
 x_out, qkv = ops.layer(
@@ -82,14 +81,14 @@ x_out, qkv = ops.layer(
     head_dim=head_dim,
     eps=1e-6,
     transpose=True,
-    backend="rapier",
+    backend="coda",
     use_compile=True,
 )
 ```
 
 ## Writing a New Epilogue
 
-The CODA GEMM mainloop is fixed; an epilogue plugs into it by overriding a handful of callback methods on `EpilogueVisitorTree` (defined in [rapier/epilogue/base.py](rapier/epilogue/base.py)). The mainloop produces a GEMM accumulator tile `tRS_rAcc` in registers, walks it sub-tile by sub-tile, and invokes the epilogue at well-defined hook points before staging the result through shared memory and storing it out via TMA.
+The CODA GEMM mainloop is fixed; an epilogue plugs into it by overriding a handful of callback methods on `EpilogueVisitorTree` (defined in [coda/core/epilogue/base.py](coda/core/epilogue/base.py)). The mainloop produces a GEMM accumulator tile `tRS_rAcc` in registers, walks it sub-tile by sub-tile, and invokes the epilogue at well-defined hook points before staging the result through shared memory and storing it out via TMA.
 
 ### Mainloop / epilogue interaction
 
@@ -129,7 +128,7 @@ Per-tile and per-sub-tile state (smem views, register tensors) flows between the
 
 ### Example: per-row scaling
 
-`EVTRMSNormScale` in [kernels/gens/epilogue/kernel_1.py](kernels/gens/epilogue/kernel_1.py) multiplies the GEMM accumulator by a per-row scalar `R` (the RMS norm reciprocal std dev). The load-and-multiply core looks like:
+`EVTRMSNormScale` in [coda/kernels/gens/epilogue/kernel_1.py](coda/kernels/gens/epilogue/kernel_1.py) multiplies the GEMM accumulator by a per-row scalar `R` (the RMS norm reciprocal std dev). The load-and-multiply core looks like:
 
 ```python
 @cute.jit
@@ -170,23 +169,25 @@ def consumer_visit(self, tRS_rD, ..., epi_tensors_loop):
 
 ```
 coda-kernels/
-├── models/          # High-level API
-│   ├── ops.py       # CODA layer implementations (forward + backward)
-│   └── ops2.py      # Corresponding PyTorch implementations
-├── kernels/
-│   ├── gens/        # LLM-authored CuTeDSL kernel implementations
-│   ├── refs/        # PyTorch reference implementations
-│   ├── tests/
-│   └── benchmarks/
-└── rapier/          # CODA kernel infrastructure
-    ├── gemm/        # WGMMA GEMM kernels and PyTorch wrapper
-    ├── epilogue/    # Composable epilogue visitors
-    ├── ops/         # Low-level utilities
-    ├── examples/    # Standalone usage examples
-    └── docs/        # Docs for LLM
+├── pyproject.toml
+└── coda/
+    ├── models/          # High-level API
+    │   ├── ops.py       # CODA layer implementations (forward + backward)
+    │   └── ops2.py      # Corresponding PyTorch implementations
+    ├── kernels/
+    │   ├── gens/        # LLM-authored CuTeDSL kernel implementations
+    │   ├── refs/        # PyTorch reference implementations
+    │   ├── tests/
+    │   └── benchmarks/
+    └── core/            # CODA kernel infrastructure (formerly "rapier")
+        ├── gemm/        # WGMMA GEMM kernels and PyTorch wrapper
+        ├── epilogue/    # Composable epilogue visitors
+        ├── ops/         # Low-level utilities
+        ├── examples/    # Standalone usage examples
+        └── docs/        # Docs for LLM
 ```
 
-### Epilogue Visitors (`rapier/epilogue/`)
+### Epilogue Visitors (`coda/core/epilogue/`)
 
 | Module | Description |
 |--------|-------------|

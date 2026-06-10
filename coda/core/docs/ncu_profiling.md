@@ -38,10 +38,10 @@ Use a dedicated device to avoid interference from other workloads (set via `--de
 
 ```bash
 # Details mode (JSON metrics output with full section data)
-python -m rapier.ops.profiling_utils script.py --mode details --device 1
+python -m coda.core.ops.profiling_utils script.py --mode details --device 1
 
 # Source mode (SASS-level analysis with stall reasons)
-python -m rapier.ops.profiling_utils script.py --mode source --device 1
+python -m coda.core.ops.profiling_utils script.py --mode source --device 1
 ```
 
 **Options:**
