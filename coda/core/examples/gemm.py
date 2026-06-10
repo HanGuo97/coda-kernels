@@ -33,8 +33,8 @@ import cutlass.cute as cute
 import cutlass.torch as cutlass_torch
 from typing import Callable
 from quack.cute_dsl_utils import torch2cute_dtype_map
-from rapier.ops.reduction_utils import get_registered_reduction_op
-from rapier.epilogue import (
+from coda.core.ops.reduction_utils import get_registered_reduction_op
+from coda.core.epilogue import (
     EVTNoOp,
     EVTList,
     EVTRowOrColBias,
@@ -49,7 +49,7 @@ from rapier.epilogue import (
     EVTMatrixLoad2X,
     EpilogueVisitorTree,
 )
-from rapier.gemm.gemm_interface import (
+from coda.core.gemm.gemm_interface import (
     DEFAULT_PINGPONG,
     DEFAULT_TILE_M,
     DEFAULT_TILE_N,

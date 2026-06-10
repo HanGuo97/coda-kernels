@@ -6,13 +6,13 @@ import cutlass.cute as cute
 import cutlass.torch as cutlass_torch
 import cuda.bindings.driver as cuda
 
-from rapier.ops import layout_utils
-from rapier.ops import memory_utils
-from rapier.ops import creation_utils
-from rapier.ops import reduction_utils
-from rapier.ops.misc_utils import static_assert
-from rapier.ops.debug_utils import isnan, check_nan
-from rapier.ops.launch_utils import launch_check
+from coda.core.ops import layout_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
+from coda.core.ops import reduction_utils
+from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.debug_utils import isnan, check_nan
+from coda.core.ops.launch_utils import launch_check
 
 ALLOWED_DTYPES = [torch.float16, torch.bfloat16, torch.float32]
 

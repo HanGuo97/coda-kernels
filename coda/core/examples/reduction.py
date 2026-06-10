@@ -7,12 +7,12 @@ import cutlass.torch as cutlass_torch
 import cuda.bindings.driver as cuda
 from typing import Callable
 
-from rapier.ops import misc_utils
-from rapier.ops import layout_utils
-from rapier.ops import memory_utils
-from rapier.ops import creation_utils
-from rapier.ops import reduction_utils
-from rapier.ops.launch_utils import launch_check
+from coda.core.ops import misc_utils
+from coda.core.ops import layout_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
+from coda.core.ops import reduction_utils
+from coda.core.ops.launch_utils import launch_check
 
 ALLOWED_DTYPES = [torch.float16, torch.bfloat16, torch.float32]
 

@@ -34,11 +34,11 @@ import cutlass.torch as cutlass_torch
 import cuda.bindings.driver as cuda
 from typing import Callable
 
-from rapier.ops import layout_utils
-from rapier.ops import memory_utils
-from rapier.ops import creation_utils
-from rapier.ops.misc_utils import static_assert
-from rapier.ops.launch_utils import launch_check
+from coda.core.ops import layout_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
+from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.launch_utils import launch_check
 
 
 @cute.kernel
