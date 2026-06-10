@@ -3,7 +3,7 @@ import cutlass.cute as cute
 from typing import NamedTuple
 from dataclasses import dataclass
 
-from rapier.ops import struct_utils
+from coda.core.ops import struct_utils
 
 
 class EpilogueSharedStorage(object):

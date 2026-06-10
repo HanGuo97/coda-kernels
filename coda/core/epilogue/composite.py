@@ -3,9 +3,9 @@ import cutlass.cute as cute
 from typing import NamedTuple
 from dataclasses import dataclass
 
-from rapier.ops import misc_utils
-from rapier.ops import struct_utils
-from rapier.epilogue.base import (
+from coda.core.ops import misc_utils
+from coda.core.ops import struct_utils
+from coda.core.epilogue.base import (
     EpilogueVisitorTree,
     EpilogueSharedStorage,
 )

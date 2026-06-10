@@ -4,12 +4,12 @@ from typing import Callable, NamedTuple
 from dataclasses import dataclass
 
 from hilt.dtype_utils import get_dtype
-from rapier.ops import misc_utils
-from rapier.ops import dtype_utils
-from rapier.ops import struct_utils
-from rapier.ops import pipeline_utils
-from rapier.ops import epilogue_utils
-from rapier.epilogue.base import (
+from coda.core.ops import misc_utils
+from coda.core.ops import dtype_utils
+from coda.core.ops import struct_utils
+from coda.core.ops import pipeline_utils
+from coda.core.ops import epilogue_utils
+from coda.core.epilogue.base import (
     EpilogueVisitorTree,
     EpilogueSharedStorage,
 )

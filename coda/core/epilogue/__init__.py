@@ -1,28 +1,28 @@
-from rapier.epilogue.base import (
+from coda.core.epilogue.base import (
     EpilogueVisitorTree,
     EpilogueSharedStorage,
     EVTNoOp,
 )
-from rapier.epilogue.composite import (
+from coda.core.epilogue.composite import (
     EVTList,
 )
-from rapier.epilogue.bias import (
+from coda.core.epilogue.bias import (
     EVTRowOrColBias,
 )
-from rapier.epilogue.reduction import (
+from coda.core.epilogue.reduction import (
     EVTRowOrColBlockReductionLoad,
     EVTColBlockReductionStore,
     EVTColBlockReductionStore2X,
     EVTRowBlockReductionStore,
 )
-from rapier.epilogue.cross_entropy import (
+from coda.core.epilogue.cross_entropy import (
     EVTPartialCrossEntropy,
     EVTSelectLogits,
 )
-from rapier.epilogue.activation import (
+from coda.core.epilogue.activation import (
     EVTActivationWithDualOutputs,
 )
-from rapier.epilogue.matrix import (
+from coda.core.epilogue.matrix import (
     EVTMatrixLoad,
     EVTResidual,
     EVTMatrixLoad2X,
