@@ -41,13 +41,13 @@ from quack.gemm_tvm_ffi_utils import (
 )
 
 from hilt.dtype_utils import get_dtype
-from rapier.ops.gemm_utils import (
+from coda.core.ops.gemm_utils import (
     get_major,
     is_valid_dtypes,
     is_valid_tensor_alignment,
 )
-from rapier.gemm import gemm_quack
-from rapier.epilogue import (
+from coda.core.gemm import gemm_quack
+from coda.core.epilogue import (
     EVTNoOp,
     EpilogueVisitorTree,
 )

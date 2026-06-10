@@ -3,10 +3,10 @@ import cutlass.cute as cute
 import cutlass.utils.hopper_helpers as sm90_utils
 
 from hilt.dtype_utils import get_dtype
-from rapier.ops import misc_utils
-from rapier.ops import gemm_utils
-from rapier.ops import memory_utils
-from rapier.ops import creation_utils
+from coda.core.ops import misc_utils
+from coda.core.ops import gemm_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
 
 
 def prepare_copy_r2s_sm90(

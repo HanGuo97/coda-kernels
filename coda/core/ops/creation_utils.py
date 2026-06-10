@@ -1,7 +1,7 @@
 import cutlass
 import cutlass.cute as cute
-from rapier.ops.misc_utils import static_assert
-from rapier.ops.layout_utils import make_ordered_layout
+from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.layout_utils import make_ordered_layout
 
 
 def allocate_tensor_from_shape(

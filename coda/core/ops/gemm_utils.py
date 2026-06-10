@@ -4,7 +4,7 @@ import cutlass.cute as cute
 import cutlass.utils.hopper_helpers as sm90_utils
 from cutlass.utils import LayoutEnum
 
-from rapier.ops.misc_utils import static_assert
+from coda.core.ops.misc_utils import static_assert
 
 
 def make_smem_layouts(

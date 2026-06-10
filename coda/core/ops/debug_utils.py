@@ -1,7 +1,7 @@
 import cutlass
 import cutlass.cute as cute
 from hilt.dtype_utils import get_dtype
-from rapier.ops.misc_utils import static_assert
+from coda.core.ops.misc_utils import static_assert
 
 
 def isnan(

@@ -4,10 +4,10 @@ import cutlass.cute as cute
 from typing import cast, NamedTuple
 
 from hilt.dtype_utils import get_dtype
-from rapier.ops import misc_utils
-from rapier.ops import dtype_utils
-from rapier.ops import layout_utils
-from rapier.ops import creation_utils
+from coda.core.ops import misc_utils
+from coda.core.ops import dtype_utils
+from coda.core.ops import layout_utils
+from coda.core.ops import creation_utils
 
 
 class MemoryCopyConfig(NamedTuple):

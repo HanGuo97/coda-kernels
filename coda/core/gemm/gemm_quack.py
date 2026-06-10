@@ -19,13 +19,13 @@ from quack.tile_scheduler import (
     PersistenceMode,
 )
 
-from rapier.ops import misc_utils
-from rapier.ops import gemm_utils
-from rapier.ops import layout_utils
-from rapier.ops import memory_utils
-from rapier.ops import pipeline_utils
-from rapier.ops.launch_utils import launch_check
-from rapier.epilogue import EpilogueVisitorTree
+from coda.core.ops import misc_utils
+from coda.core.ops import gemm_utils
+from coda.core.ops import layout_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import pipeline_utils
+from coda.core.ops.launch_utils import launch_check
+from coda.core.epilogue import EpilogueVisitorTree
 
 
 """

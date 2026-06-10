@@ -8,9 +8,9 @@ from typing import NamedTuple, cast
 from collections.abc import Callable, Sequence
 
 from hilt.dtype_utils import get_dtype
-from rapier.ops.misc_utils import Numeric, static_assert, numel
-from rapier.ops.dtype_utils import f32x2_to_i64, i64_to_f32x2
-from rapier.ops.creation_utils import allocate_tensor_from_shape
+from coda.core.ops.misc_utils import Numeric, static_assert, numel
+from coda.core.ops.dtype_utils import f32x2_to_i64, i64_to_f32x2
+from coda.core.ops.creation_utils import allocate_tensor_from_shape
 
 
 @cute.jit

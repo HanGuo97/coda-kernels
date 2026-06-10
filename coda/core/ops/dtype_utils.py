@@ -12,8 +12,8 @@ from hilt.math_utils import (
     make_tensorssa_fn_from_scalar_fn,
     make_tensorssa_fn_from_scalar_fn_different_dtype,
 )
-from rapier.ops.misc_utils import static_assert
-from rapier.ops.creation_utils import allocate_tensor_like
+from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.creation_utils import allocate_tensor_like
 
 Convertable = (
     cute.Tensor |
