@@ -1,9 +1,10 @@
 import cutlass
 import cutlass.cute as cute
 from typing import cast
-from hilt.dtype_utils import get_dtype
+
 from coda.core.ops.misc_utils import (
     product,
+    get_dtype,
     static_assert,
 )
 

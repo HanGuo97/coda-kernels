@@ -6,13 +6,12 @@ from cutlass.cutlass_dsl import T, dsl_user_op
 from cutlass._mlir import ir
 from cutlass._mlir.dialects import arith, llvm, nvvm, vector
 
-from hilt.dtype_utils import get_dtype
-from hilt.math_utils import (
+from coda.core.ops.math_utils import (
     make_dispatch_function,
     make_tensorssa_fn_from_scalar_fn,
     make_tensorssa_fn_from_scalar_fn_different_dtype,
 )
-from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.misc_utils import static_assert, get_dtype
 from coda.core.ops.creation_utils import allocate_tensor_like
 
 Convertable = (

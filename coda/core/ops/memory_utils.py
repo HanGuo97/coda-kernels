@@ -3,7 +3,6 @@ import cutlass
 import cutlass.cute as cute
 from typing import cast, NamedTuple
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import layout_utils
@@ -400,7 +399,7 @@ def g2s_copy_1d(
     num_threads: int,
     thread_index: cute.Int32,
 ) -> None:
-    dtype = get_dtype(src)
+    dtype = misc_utils.get_dtype(src)
     vector_size = cutlass.const_expr(
         cutlass.max(32, dtype.width) //
         dtype.width
@@ -442,7 +441,7 @@ def g2s_copy_2d_row_reduction(
     num_threads: int,
     thread_index: cute.Int32,
 ) -> None:
-    dtype = get_dtype(src)
+    dtype = misc_utils.get_dtype(src)
     num_rows, num_cols = src.shape
     num_threads_per_row = layout_utils.get_num_threads_per_row(
         size=num_cols,

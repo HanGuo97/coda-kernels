@@ -6,7 +6,7 @@ from cutlass.cutlass_dsl import T, dsl_user_op
 from cutlass._mlir import ir
 from cutlass._mlir.dialects import arith, llvm, nvvm, vector
 
-from coda.core.ops.misc_utils import get_dtype
+from coda.core.ops import misc_utils
 
 Scalar = cute.Numeric | cutlass.cutlass_dsl.cutlass_arith.ArithValue
 Tensor = cute.Tensor | cute.TensorSSA | Scalar
@@ -146,17 +146,17 @@ def clamp(
     min_val: cute.Numeric | float | None = None,
     max_val: cute.Numeric | float | None = None,
 ) -> cute.TensorSSA:
-    if cutlass.const_expr(get_dtype(x) != cute.Float32):
+    if cutlass.const_expr(misc_utils.get_dtype(x) != cute.Float32):
         raise NotImplementedError
     if cutlass.const_expr(
         (min_val is not None) and
         (not isinstance(min_val, float)) and
-        (get_dtype(min_val) != cute.Float32)):
+        (misc_utils.get_dtype(min_val) != cute.Float32)):
         raise NotImplementedError
     if cutlass.const_expr(
         (max_val is not None) and
         (not isinstance(max_val, float)) and
-        (get_dtype(max_val) != cute.Float32)):
+        (misc_utils.get_dtype(max_val) != cute.Float32)):
         raise NotImplementedError
     if cutlass.const_expr(
         isinstance(min_val, cute.TensorSSA) or

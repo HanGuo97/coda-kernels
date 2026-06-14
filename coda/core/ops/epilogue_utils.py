@@ -2,7 +2,6 @@ import cutlass
 import cutlass.cute as cute
 import cutlass.utils.hopper_helpers as sm90_utils
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import gemm_utils
 from coda.core.ops import memory_utils
@@ -88,7 +87,7 @@ def prepare_tma(
     epi_stage: int,
     epi_tensor: cute.Tensor,
 ) -> tuple[cutlass.utils.LayoutEnum, cute.Layout, cute.CopyAtom, cute.Tensor]:
-    epi_dtype = get_dtype(epi_tensor)
+    epi_dtype = misc_utils.get_dtype(epi_tensor)
     epi_coord = cute.make_identity_layout(epi_tensor.shape)
     epi_gmem_layout = cutlass.utils.LayoutEnum.from_tensor(epi_tensor)
     epi_smem_layout_staged = sm90_utils.make_smem_layout_epi(
@@ -172,7 +171,7 @@ def get_smem_size_vector(
     epi_num_threads: int,
 ) -> int:
     mTensor = misc_utils.static_assert_is_Tensor(mTensor)
-    epi_dtype = get_dtype(mTensor)
+    epi_dtype = misc_utils.get_dtype(mTensor)
     # we at least need certain number of smem size to avoid OOB smem access
     # https://github.com/NVIDIA/cutlass/issues/2980
     # we also need to make sure consistency between
@@ -194,7 +193,7 @@ def get_epi_smem_bytes_per_stage_fixed_vector(
     epi_num_threads: int,
 ) -> int:
     mTensor = misc_utils.static_assert_is_Tensor(mTensor)
-    epi_dtype = get_dtype(mTensor)
+    epi_dtype = misc_utils.get_dtype(mTensor)
     vec_smem_size = get_smem_size_vector(
         mTensor=mTensor,
         epi_tile=epi_tile,
@@ -213,7 +212,7 @@ def get_epi_smem_bytes_per_stage_matrix(
     epi_tile: cute.Tile,
 ) -> int:
     mTensor = misc_utils.static_assert_is_Tensor(mTensor)
-    epi_dtype = get_dtype(mTensor)
+    epi_dtype = misc_utils.get_dtype(mTensor)
     epi_smem_bytes_per_stage = (
         cute.size(epi_tile) *
         epi_dtype.width //
