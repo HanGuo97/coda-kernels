@@ -40,7 +40,7 @@ from quack.gemm_tvm_ffi_utils import (
     make_fake_scheduler_args,
 )
 
-from hilt.dtype_utils import get_dtype
+from coda.core.ops import misc_utils
 from coda.core.ops.gemm_utils import (
     get_major,
     is_valid_dtypes,
@@ -253,10 +253,10 @@ def gemm_epilogue(
         )
 
         if not is_valid_dtypes(
-            a_dtype=get_dtype(A_cute),
-            b_dtype=get_dtype(B_cute),
+            a_dtype=misc_utils.get_dtype(A_cute),
+            b_dtype=misc_utils.get_dtype(B_cute),
             acc_dtype=ACC_DTYPE,
-            c_dtype=get_dtype(C_cute),
+            c_dtype=misc_utils.get_dtype(C_cute),
             a_major=get_major(A_cute, dims=("m", "k", "l")),
             b_major=get_major(B_cute, dims=("n", "k", "l")),
         ):
@@ -267,8 +267,8 @@ def gemm_epilogue(
             n=N,
             k=K,
             l=L,
-            ab_dtype=get_dtype(A_cute),
-            c_dtype=get_dtype(C_cute),
+            ab_dtype=misc_utils.get_dtype(A_cute),
+            c_dtype=misc_utils.get_dtype(C_cute),
             a_major=get_major(A_cute, dims=("m", "k", "l")),
             b_major=get_major(B_cute, dims=("n", "k", "l")),
             c_major=get_major(C_cute, dims=("m", "n", "l")),

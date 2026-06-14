@@ -3,7 +3,6 @@ import cutlass.cute as cute
 from typing import NamedTuple
 from dataclasses import dataclass
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import struct_utils
 from coda.core.ops import layout_utils
@@ -278,7 +277,7 @@ class EVTPartialCrossEntropy(EpilogueVisitorTree):
                             else cute.Float32.zero
                         )
                         lse = row_max + cute.math.log(tDrSSEVec_m[m], fastmath=True)
-                        gLSEVec[row_idx] = lse.to(dtype=get_dtype(gLSEVec))
+                        gLSEVec[row_idx] = lse.to(dtype=misc_utils.get_dtype(gLSEVec))
 
     @cute.jit
     def consumer_begin_loop(
@@ -349,7 +348,7 @@ class EVTPartialCrossEntropy(EpilogueVisitorTree):
                             m0=tDrMaxVec_epi[i],
                             m1=tRS_rD[i],
                             s0=tDrSSEVec_epi[i],
-                            s1=get_dtype(tDrSSEVec_epi)(1),
+                            s1=misc_utils.get_dtype(tDrSSEVec_epi)(1),
                         )
             else:
                 raise NotImplementedError
@@ -609,7 +608,7 @@ class EVTSelectLogits(EpilogueVisitorTree):
             gLogits = misc_utils.static_assert_is_Tensor(epi_tensors_loop.gLogits)
             tDrTarget_epi = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tDrTarget_epi)
             tDcLogits_epi = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tDcLogits_epi)
-            logit_type = get_dtype(gLogits)
+            logit_type = misc_utils.get_dtype(gLogits)
 
             misc_utils.static_assert(cute.size(tDrTarget_epi) == cute.size(tDcLogits_epi))
             for i in cutlass.range_constexpr(cute.size(tDrTarget_epi)):
@@ -646,7 +645,7 @@ class EVTSelectLogits(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_params.mTarget is not None):
             mTarget = misc_utils.static_assert_is_Tensor(epi_params.mTarget)
-            col_vec_dtype = get_dtype(mTarget)
+            col_vec_dtype = misc_utils.get_dtype(mTarget)
             col_vec_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mTarget,
                 epi_tile=self.tile_shape_mnk[0],

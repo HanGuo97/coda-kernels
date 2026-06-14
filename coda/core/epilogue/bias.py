@@ -3,7 +3,6 @@ import cutlass.cute as cute
 from typing import NamedTuple
 from dataclasses import dataclass
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import struct_utils
 from coda.core.ops import layout_utils
@@ -281,7 +280,7 @@ class EVTRowOrColBias(EpilogueVisitorTree):
     ) -> type[EpilogueSharedStorage]:
         if cutlass.const_expr(epi_params.mRowVec is not None):
             mRowVec = misc_utils.static_assert_is_Tensor(epi_params.mRowVec)
-            row_vec_dtype = get_dtype(mRowVec)
+            row_vec_dtype = misc_utils.get_dtype(mRowVec)
             row_vec_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mRowVec,
                 epi_tile=self.tile_shape_mnk[1],
@@ -293,7 +292,7 @@ class EVTRowOrColBias(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_params.mColVec is not None):
             mColVec = misc_utils.static_assert_is_Tensor(epi_params.mColVec)
-            col_vec_dtype = get_dtype(mColVec)
+            col_vec_dtype = misc_utils.get_dtype(mColVec)
             col_vec_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mColVec,
                 epi_tile=self.tile_shape_mnk[0],

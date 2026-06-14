@@ -3,7 +3,6 @@ import cutlass.cute as cute
 from typing import Callable, NamedTuple
 from dataclasses import dataclass
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -126,7 +125,7 @@ class EVTMatrixLoad(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             if cutlass.const_expr(self.container_dtype is not self.epi_dtype):
                 mMatrix = cute.recast_tensor(
                     mMatrix,
@@ -454,7 +453,7 @@ class EVTMatrixLoad(EpilogueVisitorTree):
         # stages, the smem storage is per stage
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             if cutlass.const_expr(self.container_dtype is not self.epi_dtype):
                 mMatrix = cute.recast_tensor(
                     mMatrix,
@@ -549,7 +548,7 @@ class EVTResidual(EVTMatrixLoad):
             tRS_rC = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tRS_rMatrix)
             rC = tRS_rC.load()
             rD = tRS_rD.load()
-            rC = dtype_utils.convert(rC, dtype=get_dtype(tRS_rD))
+            rC = dtype_utils.convert(rC, dtype=misc_utils.get_dtype(tRS_rD))
             tRS_rD.store(rD + rC)
         else:
             tRS_rC = epi_tensors_loop.tRS_rMatrix
@@ -643,9 +642,9 @@ class EVTMatrixLoad2X(EVTMatrixLoad):
     ) -> EpilogueTensorsLoop:
         if cutlass.const_expr(epi_tensors_loop.tRS_rMatrix is not None):
             tRS_rC = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tRS_rMatrix)
-            misc_utils.static_assert(get_dtype(tRS_rC) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(tRS_rC) is self.container_dtype)
             tRS_rC = cute.recast_tensor(tRS_rC, dtype=self.epi_dtype)
-            tRS_rC = dtype_utils.convert(tRS_rC, dtype=get_dtype(tRS_rD))
+            tRS_rC = dtype_utils.convert(tRS_rC, dtype=misc_utils.get_dtype(tRS_rD))
             if cutlass.const_expr(self.arch < 100):
                 for i in cutlass.range_constexpr(cute.size(tRS_rD)):
                     tRS_rD[i] = self.fn(tRS_rD[i], tRS_rC[2 * i], tRS_rC[2 * i + 1])

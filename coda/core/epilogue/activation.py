@@ -3,7 +3,6 @@ import cutlass.cute as cute
 from typing import Callable, NamedTuple
 from dataclasses import dataclass
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -176,7 +175,7 @@ class EVTActivationWithDualOutputs(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.container_dtype)
             (
                 epi_gmem_layout,
                 epi_smem_layout_staged,
@@ -358,13 +357,13 @@ class EVTActivationWithDualOutputs(EpilogueVisitorTree):
                 layout_utils.permute_gated_Cregs_b16(tRS_rPostAct)
 
         elif cutlass.const_expr(self.ftype == "expansion"):
-            misc_utils.static_assert(get_dtype(tRS_rD).width == 32)
+            misc_utils.static_assert(misc_utils.get_dtype(tRS_rD).width == 32)
             misc_utils.static_assert(self.post_act_dtype.width == 16)
             misc_utils.static_assert(self.container_dtype.width == 32)
             tRS_rPostAct = creation_utils.allocate_tensor_from_recast_layout(
                 layout=tRS_rD.layout,
                 new_type_bits=self.post_act_dtype.width,
-                old_type_bits=get_dtype(tRS_rD).width,
+                old_type_bits=misc_utils.get_dtype(tRS_rD).width,
                 memspace="rmem",
                 smem_allocator=None,
                 dtype=self.acc_dtype,
@@ -485,7 +484,7 @@ class EVTActivationWithDualOutputs(EpilogueVisitorTree):
         # stages, the smem storage is per stage
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.container_dtype)
             # when TMA is used, the tile size should be `cute.size(epi_tile)`
             epi_smem_bytes_per_stage_cst = epi_smem_bytes_per_stage_cst + (
                 epilogue_utils.get_epi_smem_bytes_per_stage_matrix(

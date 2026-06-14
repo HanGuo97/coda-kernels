@@ -3,7 +3,6 @@ import cutlass.cute as cute
 from typing import NamedTuple
 from dataclasses import dataclass
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -139,8 +138,8 @@ class EVTRowOrColBlockReductionLoad(EpilogueVisitorTree):
         if cutlass.const_expr(epi_args.mColBlkLd is not None):
             mColBlkLd = misc_utils.static_assert_is_Tensor(epi_args.mColBlkLd)
             mColVecSt = misc_utils.static_assert_is_Tensor(epi_args.mColVecSt)
-            col_blk_ld_dtype = get_dtype(mColBlkLd)
-            col_vec_st_dtype = get_dtype(mColVecSt)
+            col_blk_ld_dtype = misc_utils.get_dtype(mColBlkLd)
+            col_vec_st_dtype = misc_utils.get_dtype(mColVecSt)
             col_blk_ld_count = mColBlkLd.shape[2]
             col_blk_ld_nbits = col_blk_ld_dtype.width * col_blk_ld_count
             misc_utils.static_assert(col_blk_ld_nbits % 128 == 0)
@@ -300,7 +299,7 @@ class EVTRowOrColBlockReductionLoad(EpilogueVisitorTree):
                 for m in cutlass.range_constexpr(cute.size(tDcColVecSt_m, mode=[0])):
                     row_idx = tDcColVecSt_m[m][0]
                     if row_idx < col_vec_limit_m:
-                        gColVecSt[row_idx] = tDrColVecSt_m[m].to(dtype=get_dtype(gColVecSt))
+                        gColVecSt[row_idx] = tDrColVecSt_m[m].to(dtype=misc_utils.get_dtype(gColVecSt))
 
     @cute.jit
     def consumer_begin_loop(
@@ -389,7 +388,7 @@ class EVTRowOrColBlockReductionLoad(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_params.mColBlkLd is not None):
             mColBlkLd = misc_utils.static_assert_is_Tensor(epi_params.mColBlkLd)
-            col_blk_ld_dtype = get_dtype(mColBlkLd)
+            col_blk_ld_dtype = misc_utils.get_dtype(mColBlkLd)
             col_blk_ld_count = mColBlkLd.shape[2]
             col_blk_ld_smem_size = self.tile_shape_mnk[0] * col_blk_ld_count
         else:
@@ -450,7 +449,7 @@ class EVTRowOrColBlockReductionLoad(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mColBlkLd is not None):
             mColBlkLd = misc_utils.static_assert_is_Tensor(epi_args.mColBlkLd)
-            col_blk_ld_dtype = get_dtype(mColBlkLd)
+            col_blk_ld_dtype = misc_utils.get_dtype(mColBlkLd)
             col_blk_ld_count = mColBlkLd.shape[2]
             col_blk_ld_smem_size = self.tile_shape_mnk[0] * col_blk_ld_count
             epi_smem_bytes_fixed = epi_smem_bytes_fixed + (
@@ -647,7 +646,7 @@ class EVTColBlockReductionStore(EpilogueVisitorTree):
                 for m in cutlass.range_constexpr(cute.size(tDcColVec_m, mode=[0])):
                     row_idx = tDcColVec_m[m][0]
                     if row_idx < col_vec_limit_m:
-                        gColVec[row_idx] = tDrColVec_m[m].to(dtype=get_dtype(gColVec))
+                        gColVec[row_idx] = tDrColVec_m[m].to(dtype=misc_utils.get_dtype(gColVec))
 
     @cute.jit
     def consumer_begin_loop(
@@ -908,7 +907,7 @@ class EVTRowBlockReductionStore(EpilogueVisitorTree):
                 for n in cutlass.range_constexpr(cute.size(tDcRowVec_n, mode=[0])):
                     col_idx = tDcRowVec_n[n][1]
                     if col_idx < row_vec_limit_n:
-                        gRowVec[col_idx] = tDrRowVec_n[n].to(dtype=get_dtype(gRowVec))
+                        gRowVec[col_idx] = tDrRowVec_n[n].to(dtype=misc_utils.get_dtype(gRowVec))
 
     @cute.jit
     def consumer_begin_loop(
@@ -1117,7 +1116,7 @@ class EVTColBlockReductionStore2X(EVTColBlockReductionStore):
 
         if cutlass.const_expr(epi_params.mColVec is not None):
             mColVec = misc_utils.static_assert_is_Tensor(epi_params.mColVec)
-            col_vec_dtype = get_dtype(mColVec)
+            col_vec_dtype = misc_utils.get_dtype(mColVec)
             if cutlass.const_expr(col_vec_dtype in (cute.Float16, cute.BFloat16)):
                 mColVec = cute.recast_tensor(mColVec, dtype=cute.Float32)
             else:
@@ -1128,9 +1127,9 @@ class EVTColBlockReductionStore2X(EVTColBlockReductionStore):
                 tDrColVec,
                 memspace="rmem",
                 smem_allocator=None,
-                dtype=get_dtype(mColVec),
+                dtype=misc_utils.get_dtype(mColVec),
             )
-            misc_utils.static_assert(get_dtype(tDrColVec) is cute.Int64)
+            misc_utils.static_assert(misc_utils.get_dtype(tDrColVec) is cute.Int64)
 
             col_vec_limit_m = min(shape_mnk[0] - m_idx * tile_M, tile_M)
             col_vec_limit_n = mColVec.shape[2]
@@ -1160,7 +1159,7 @@ class EVTColBlockReductionStore2X(EVTColBlockReductionStore):
                         tDrColVec_filtered_cvt_0,
                         tDrColVec_filtered_cvt_1,
                         src_dtype=col_vec_dtype,
-                        dst_dtype=get_dtype(mColVec),
+                        dst_dtype=misc_utils.get_dtype(mColVec),
                     )
             else:
                 # Don't need warp_reduce since we load from tmem with one thread per row
@@ -1178,7 +1177,7 @@ class EVTColBlockReductionStore2X(EVTColBlockReductionStore):
                     row_idx = tDcColVec_m[m][0]
                     if row_idx < col_vec_limit_m:
                         # we cannot cast since the types are just containers
-                        gColVec[row_idx] = tDrColVec_m[m]#.to(dtype=get_dtype(gColVec))
+                        gColVec[row_idx] = tDrColVec_m[m]#.to(dtype=misc_utils.get_dtype(gColVec))
 
     @cute.jit
     def consumer_visit(
@@ -1190,8 +1189,8 @@ class EVTColBlockReductionStore2X(EVTColBlockReductionStore):
     ) -> EpilogueTensorsLoop:
         if cutlass.const_expr(epi_tensors_loop.tDrColVec_epi is not None):
             tDrColVec_epi = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tDrColVec_epi)
-            misc_utils.static_assert(get_dtype(tRS_rD) is cute.Float32)
-            misc_utils.static_assert(get_dtype(tDrColVec_epi) is cute.Int64)
+            misc_utils.static_assert(misc_utils.get_dtype(tRS_rD) is cute.Float32)
+            misc_utils.static_assert(misc_utils.get_dtype(tDrColVec_epi) is cute.Int64)
 
             if cutlass.const_expr(self.arch < 100):
                 for i in cutlass.range_constexpr(cute.size(tDrColVec_epi)):
