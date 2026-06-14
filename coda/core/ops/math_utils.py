@@ -1,15 +1,121 @@
 import cutlass
 import cutlass.cute as cute
+from collections.abc import Callable
 from cutlass.cutlass_dsl import T, dsl_user_op
 
 from cutlass._mlir import ir
 from cutlass._mlir.dialects import arith, llvm, nvvm, vector
 
-from hilt.dtype_utils import get_dtype
-from hilt.math_utils import (
-    make_dispatch_function,
-    make_tensorssa_fn_from_scalar_fn,
-)
+from coda.core.ops.misc_utils import get_dtype
+
+Scalar = cute.Numeric | cutlass.cutlass_dsl.cutlass_arith.ArithValue
+Tensor = cute.Tensor | cute.TensorSSA | Scalar
+
+
+def make_dispatch_function(
+    fn_tensor: Callable[[object], cute.Tensor] | None = None,
+    fn_tensorssa: Callable[[object], cute.TensorSSA] | None = None,
+    fn_scalar: Callable[[object], Scalar] | None = None,
+    dispatch_policy: str | None = None,
+) -> Callable[[object], Tensor]:
+    """Creates a function that dispatches to appropriate function based on input types.
+
+    :param fn_tensor: function to call for cute.Tensor inputs
+    :param fn_tensorssa: function to call for cute.TensorSSA inputs
+    :param fn_scalar: function to call for scalar inputs
+    :param dispatch_policy: dispatching strategy
+    :return: dispatcher function
+    """
+    if dispatch_policy is None:
+        dispatch_policy = "first"
+
+    def _dispatcher(*args, **kwargs) -> Tensor:
+        if cutlass.const_expr(dispatch_policy == "first"):
+            if cutlass.const_expr(len(args) > 0):
+                dispatch_arg = args[0]
+            else:
+                raise ValueError
+
+        if cutlass.const_expr(isinstance(dispatch_arg, cute.Tensor)):
+            if cutlass.const_expr(fn_tensor is not None):
+                return fn_tensor(*args, **kwargs)
+            else:
+                raise NotImplementedError
+        if cutlass.const_expr(isinstance(dispatch_arg, cute.TensorSSA)):
+            if cutlass.const_expr(fn_tensorssa is not None):
+                return fn_tensorssa(*args, **kwargs)
+            else:
+                raise NotImplementedError
+        if cutlass.const_expr(isinstance(dispatch_arg, Scalar)):
+            if cutlass.const_expr(fn_scalar is not None):
+                return fn_scalar(*args, **kwargs)
+            else:
+                raise NotImplementedError
+        raise NotImplementedError
+
+    return _dispatcher
+
+
+def make_tensorssa_fn_from_scalar_fn(
+    fn_scalar: Callable[[object], Scalar],
+    variadic_policy: str | None = None,
+) -> Callable[[object], cute.TensorSSA]:
+    # https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+
+    if variadic_policy is None:
+        variadic_policy = "first"
+
+    @cute.jit
+    def _tensorssa_fn(*args, **kwargs) -> cute.TensorSSA:
+        if cutlass.const_expr(variadic_policy == "first"):
+            if cutlass.const_expr(len(args) > 0):
+                x = args[0]
+                extra_args = args[1:]
+            else:
+                raise ValueError
+
+        assert cutlass.const_expr(isinstance(x, cute.TensorSSA))
+        res = cute.make_fragment(x.shape, x.dtype)
+        res.store(x)
+
+        for i in cutlass.range_constexpr(cute.size(x.shape)):
+            res[i] = fn_scalar(res[i], *extra_args, **kwargs)
+
+        return res.load()
+
+    return _tensorssa_fn
+
+
+def make_tensorssa_fn_from_scalar_fn_different_dtype(
+    fn_scalar: Callable[[object], Scalar],
+    dtype: type[cute.Numeric],
+    variadic_policy: str | None = None,
+) -> Callable[[object], cute.TensorSSA]:
+    # https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+
+    if variadic_policy is None:
+        variadic_policy = "first"
+
+    @cute.jit
+    def _tensorssa_fn(*args, **kwargs) -> cute.TensorSSA:
+        if cutlass.const_expr(variadic_policy == "first"):
+            if cutlass.const_expr(len(args) > 0):
+                x = args[0]
+                extra_args = args[1:]
+            else:
+                raise ValueError
+
+        assert cutlass.const_expr(isinstance(x, cute.TensorSSA))
+        tensor_x = cute.make_fragment(x.shape, x.dtype)
+        tensor_y = cute.make_fragment(x.shape, dtype)
+        tensor_x.store(x)
+
+        for i in cutlass.range_constexpr(cute.size(x.shape)):
+            tensor_y[i] = fn_scalar(tensor_x[i], *extra_args, **kwargs)
+
+        return tensor_y.load()
+
+    return _tensorssa_fn
 
 
 @dsl_user_op
