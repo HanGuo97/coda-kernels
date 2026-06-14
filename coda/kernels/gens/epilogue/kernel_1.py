@@ -4,7 +4,6 @@ import cutlass.cute as cute
 from dataclasses import dataclass
 from typing import Callable, NamedTuple
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import struct_utils
 from coda.core.ops import layout_utils
@@ -219,7 +218,7 @@ class EVTRMSNormScale(EpilogueVisitorTree):
     ) -> type[EpilogueSharedStorage]:
         if cutlass.const_expr(epi_params.mColVec is not None):
             mColVec = misc_utils.static_assert_is_Tensor(epi_params.mColVec)
-            col_vec_dtype = get_dtype(mColVec)
+            col_vec_dtype = misc_utils.get_dtype(mColVec)
             col_vec_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mColVec,
                 epi_tile=self.tile_shape_mnk[0],

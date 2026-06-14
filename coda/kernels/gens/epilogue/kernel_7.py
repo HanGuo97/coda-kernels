@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Callable, NamedTuple
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -138,7 +137,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
     ) -> EpilogueParams:
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             mMatrix = cute.recast_tensor(mMatrix, dtype=self.container_dtype)
             (
                 epi_gmem_layout_load,
@@ -154,7 +153,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mDZ is not None):
             mDZ = misc_utils.static_assert_is_Tensor(epi_args.mDZ)
-            misc_utils.static_assert(get_dtype(mDZ) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mDZ) is self.epi_dtype)
             mDZ_recast = cute.recast_tensor(mDZ, dtype=self.container_dtype)
             (
                 epi_gmem_layout_store_dz,
@@ -397,7 +396,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
                 for m in cutlass.range(cute.size(tDcColVec_m, mode=[0])):
                     row_idx = tDcColVec_m[m][0]
                     if row_idx < col_vec_limit_m:
-                        gColVec[row_idx] = tDrColVec_m[m].to(dtype=get_dtype(gColVec))
+                        gColVec[row_idx] = tDrColVec_m[m].to(dtype=misc_utils.get_dtype(gColVec))
 
     @cute.jit
     def consumer_begin_loop(
@@ -463,9 +462,9 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_tensors_loop.tRS_rMatrix is not None):
             tRS_rZ = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tRS_rMatrix)
-            misc_utils.static_assert(get_dtype(tRS_rZ) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(tRS_rZ) is self.container_dtype)
             tRS_rZ = cute.recast_tensor(tRS_rZ, dtype=self.epi_dtype)
-            tRS_rZ = dtype_utils.convert(tRS_rZ, dtype=get_dtype(tRS_rD))
+            tRS_rZ = dtype_utils.convert(tRS_rZ, dtype=misc_utils.get_dtype(tRS_rD))
 
             has_zdz_red = cutlass.const_expr(epi_tensors_loop.tDrColVec_epi is not None)
             if cutlass.const_expr(has_zdz_red):
@@ -475,7 +474,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
             tRS_rDZ = creation_utils.allocate_tensor_from_recast_layout(
                 layout=tRS_rD.layout,
                 new_type_bits=self.epi_dtype.width,
-                old_type_bits=get_dtype(tRS_rD).width,
+                old_type_bits=misc_utils.get_dtype(tRS_rD).width,
                 memspace="rmem",
                 smem_allocator=None,
                 dtype=self.acc_dtype,
@@ -654,7 +653,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             mMatrix = cute.recast_tensor(mMatrix, dtype=self.container_dtype)
             epi_smem_bytes_per_stage_pld = epi_smem_bytes_per_stage_pld + epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                 mTensor=mMatrix, epi_tile=epi_tile,
@@ -662,7 +661,7 @@ class EVTSwiGLUBwdReduced(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mDZ is not None):
             mDZ = misc_utils.static_assert_is_Tensor(epi_args.mDZ)
-            misc_utils.static_assert(get_dtype(mDZ) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mDZ) is self.epi_dtype)
             mDZ = cute.recast_tensor(mDZ, dtype=self.container_dtype)
             epi_smem_bytes_per_stage_cst = epi_smem_bytes_per_stage_cst + epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                 mTensor=mDZ, epi_tile=epi_tile,

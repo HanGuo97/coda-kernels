@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Callable, NamedTuple
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -167,7 +166,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             (
                 epi_gmem_layout_load,
                 epi_smem_layout_staged_load,
@@ -182,7 +181,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.epi_dtype)
             (
                 epi_gmem_layout_store,
                 epi_smem_layout_staged_store,
@@ -550,7 +549,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
             tDrRowVec_epi = epi_tensors_loop.tDrRowVec_epi
 
             rC = tRS_rC.load()
-            rC = dtype_utils.convert(rC, dtype=get_dtype(tRS_rD))
+            rC = dtype_utils.convert(rC, dtype=misc_utils.get_dtype(tRS_rD))
 
             # Allocate register tensor for C_out = C_norm * W (= h_norm)
             tRS_rPostAct = creation_utils.allocate_tensor_like(
@@ -720,7 +719,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
             for n in cutlass.range(cute.size(tDcRowVec_n, mode=[0])):
                 col_idx = tDcRowVec_n[n][1]
                 if col_idx < row_vec_limit_n:
-                    gRowVec[col_idx] = tDrRowVec_n[n].to(dtype=get_dtype(gRowVec))
+                    gRowVec[col_idx] = tDrRowVec_n[n].to(dtype=misc_utils.get_dtype(gRowVec))
 
     @cute.jit
     def producer_begin(
@@ -782,7 +781,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
     def get_smem_struct(self, epi_load_stage, epi_num_threads, epi_params):
         if cutlass.const_expr(epi_params.mColVecR is not None):
             mColVecR = misc_utils.static_assert_is_Tensor(epi_params.mColVecR)
-            col_vec_r_dtype = get_dtype(mColVecR)
+            col_vec_r_dtype = misc_utils.get_dtype(mColVecR)
             col_vec_r_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mColVecR, epi_tile=self.tile_shape_mnk[0], epi_num_threads=epi_num_threads,
             )
@@ -792,7 +791,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_params.mColVecZdZ is not None):
             mColVecZdZ = misc_utils.static_assert_is_Tensor(epi_params.mColVecZdZ)
-            col_vec_zdz_dtype = get_dtype(mColVecZdZ)
+            col_vec_zdz_dtype = misc_utils.get_dtype(mColVecZdZ)
             col_vec_zdz_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mColVecZdZ, epi_tile=self.tile_shape_mnk[0], epi_num_threads=epi_num_threads,
             )
@@ -822,7 +821,7 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
         # W (RMSNorm weight) row vector: tile_N elements, broadcast over M.
         if cutlass.const_expr(epi_params.mRowBias is not None):
             mRowBias = misc_utils.static_assert_is_Tensor(epi_params.mRowBias)
-            row_bias_dtype = get_dtype(mRowBias)
+            row_bias_dtype = misc_utils.get_dtype(mRowBias)
             row_bias_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mRowBias, epi_tile=self.tile_shape_mnk[1], epi_num_threads=epi_num_threads,
             )
@@ -905,13 +904,13 @@ class EVTResidualRMSNormBwd(EpilogueVisitorTree):
             )
         if cutlass.const_expr(epi_args.mMatrix is not None):
             mMatrix = misc_utils.static_assert_is_Tensor(epi_args.mMatrix)
-            misc_utils.static_assert(get_dtype(mMatrix) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mMatrix) is self.epi_dtype)
             epi_smem_bytes_per_stage_pld = epi_smem_bytes_per_stage_pld + epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                 mTensor=mMatrix, epi_tile=epi_tile,
             )
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.epi_dtype)
             epi_smem_bytes_per_stage_cst = epi_smem_bytes_per_stage_cst + epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                 mTensor=mPostAct, epi_tile=epi_tile,
             )

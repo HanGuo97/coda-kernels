@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Callable, NamedTuple
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -127,7 +126,7 @@ class EVTRoPE(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mCosSin is not None):
             mCosSin = misc_utils.static_assert_is_Tensor(epi_args.mCosSin)
-            misc_utils.static_assert(get_dtype(mCosSin) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mCosSin) is self.epi_dtype)
             (
                 load_gmem_layout,
                 load_smem_layout_staged,
@@ -142,7 +141,7 @@ class EVTRoPE(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mOutput is not None):
             mOutput = misc_utils.static_assert_is_Tensor(epi_args.mOutput)
-            misc_utils.static_assert(get_dtype(mOutput) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mOutput) is self.epi_dtype)
             (
                 store_gmem_layout,
                 store_smem_layout_staged,
@@ -369,7 +368,7 @@ class EVTRoPE(EpilogueVisitorTree):
         if cutlass.const_expr(epi_tensors_loop.tRS_rCosSin is not None):
             tRS_rCS = misc_utils.static_assert_is_Tensor(epi_tensors_loop.tRS_rCosSin)
             # Convert cos_sin from epi_dtype to acc_dtype (fp32)
-            tRS_rCS = dtype_utils.convert(tRS_rCS, dtype=get_dtype(tRS_rD))
+            tRS_rCS = dtype_utils.convert(tRS_rCS, dtype=misc_utils.get_dtype(tRS_rD))
 
             # Allocate output register tensor (same shape as accumulator)
             tRS_rOutput = creation_utils.allocate_tensor_like(
@@ -587,7 +586,7 @@ class EVTRoPE(EpilogueVisitorTree):
         # cos_sin loading: producer-staged
         if cutlass.const_expr(epi_args.mCosSin is not None):
             mCosSin = misc_utils.static_assert_is_Tensor(epi_args.mCosSin)
-            misc_utils.static_assert(get_dtype(mCosSin) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mCosSin) is self.epi_dtype)
             epi_smem_bytes_per_stage_pld = epi_smem_bytes_per_stage_pld + (
                 epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                     mTensor=mCosSin,
@@ -598,7 +597,7 @@ class EVTRoPE(EpilogueVisitorTree):
         # output storing: consumer-staged
         if cutlass.const_expr(epi_args.mOutput is not None):
             mOutput = misc_utils.static_assert_is_Tensor(epi_args.mOutput)
-            misc_utils.static_assert(get_dtype(mOutput) is self.epi_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mOutput) is self.epi_dtype)
             epi_smem_bytes_per_stage_cst = epi_smem_bytes_per_stage_cst + (
                 epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                     mTensor=mOutput,

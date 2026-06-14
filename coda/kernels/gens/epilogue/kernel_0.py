@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Callable, NamedTuple
 
 from quack.cute_dsl_utils import torch2cute_dtype_map
-from hilt.dtype_utils import get_dtype
 from coda.core.ops import misc_utils
 from coda.core.ops import dtype_utils
 from coda.core.ops import struct_utils
@@ -148,7 +147,7 @@ class EVTRowVecMulPostAct(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.container_dtype)
             (
                 epi_gmem_layout,
                 epi_smem_layout_staged,
@@ -404,7 +403,7 @@ class EVTRowVecMulPostAct(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_params.mRowVec is not None):
             mRowVec = misc_utils.static_assert_is_Tensor(epi_params.mRowVec)
-            row_vec_dtype = get_dtype(mRowVec)
+            row_vec_dtype = misc_utils.get_dtype(mRowVec)
             row_vec_smem_size = epilogue_utils.get_smem_size_vector(
                 mTensor=mRowVec,
                 epi_tile=self.tile_shape_mnk[1],
@@ -461,7 +460,7 @@ class EVTRowVecMulPostAct(EpilogueVisitorTree):
 
         if cutlass.const_expr(epi_args.mPostAct is not None):
             mPostAct = misc_utils.static_assert_is_Tensor(epi_args.mPostAct)
-            misc_utils.static_assert(get_dtype(mPostAct) is self.container_dtype)
+            misc_utils.static_assert(misc_utils.get_dtype(mPostAct) is self.container_dtype)
             epi_smem_bytes_per_stage_cst = epi_smem_bytes_per_stage_cst + (
                 epilogue_utils.get_epi_smem_bytes_per_stage_matrix(
                     mTensor=mPostAct,
