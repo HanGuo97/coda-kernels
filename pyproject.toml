@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coda-kernels"
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "nvidia-cutlass-dsl",
+    "quack-kernels",
+    "apache-tvm-ffi",
+    "torch-c-dlpack-ext",
+    "einops",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "coda.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["coda*"]
