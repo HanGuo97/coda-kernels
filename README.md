@@ -15,6 +15,15 @@
 </p>
 
 
+## Installation
+
+```bash
+git clone https://github.com/HanGuo97/coda-kernels.git
+cd coda-kernels
+pip install -e .
+```
+
+
 ## Quick Start
 
 > [!NOTE]
