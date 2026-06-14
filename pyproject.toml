@@ -13,6 +13,7 @@ dependencies = [
     "apache-tvm-ffi",
     "torch-c-dlpack-ext",
     "einops",
+    "ipdb",
 ]
 
 [tool.setuptools.dynamic]
