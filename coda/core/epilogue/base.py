@@ -20,14 +20,11 @@ class Epilogue(object):
         self,
         gemm: GemmSm90,
         params: ParamsBase,
-        epi_loop_tensors: tuple[cute.Tensor, ...],
+        epi_loop_tensors: dict,
         tRS_rD: cute.Tensor,
-        tRS_rC: cute.Tensor | None = None,
-    ) -> tuple[cute.Tensor, ...]:
-        return ()
-
-    def _leaves(self) -> list["Epilogue"]:
-        return [self]
+        tRS_rC: cute.Tensor | None,
+    ) -> cute.Tensor | None:
+        return None
 
     def bind(self, name: str, gemm_cls: type) -> type:
-        return _lower(self._leaves(), name=name, gemm_cls=gemm_cls)
+        return _lower(self, name=name, gemm_cls=gemm_cls)
