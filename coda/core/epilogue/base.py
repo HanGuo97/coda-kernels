@@ -5,7 +5,7 @@ from typing import Iterable, NamedTuple
 
 from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import mlir_namedtuple, ParamsBase
-from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, EpiOp
+from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, VecReduce, EpiOp
 from quack.epi_composable import ComposableEpiMixin
 from quack.gemm_act import GemmActMixin
 from quack.rounding import RoundingMode
@@ -82,7 +82,7 @@ def _arg_field(op: EpiOp) -> tuple:
         else:
             dtype = op.dtype
         return (op.name, dtype | cute.Tensor | None, None)
-    if isinstance(op, (RowVecLoad, ColVecLoad, TileLoad)):
+    if isinstance(op, (RowVecLoad, ColVecLoad, TileLoad, VecReduce)):
         return (op.name, cute.Tensor | None, None)
     if isinstance(op, TileStore):
         return (op.name, cute.Tensor, MISSING)
