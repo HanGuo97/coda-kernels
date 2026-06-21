@@ -33,7 +33,7 @@ class _Composite(Epilogue):
         self._children = list(epilogues)
 
     def declares(self) -> tuple[EpiOp, ...]:
-        return _normalize(child.declares() for child in self._children)
+        return tuple(op for child in self._children for op in child.declares())
 
     def cache_key(self) -> tuple:
         return tuple(child.cache_key() for child in self._children)
