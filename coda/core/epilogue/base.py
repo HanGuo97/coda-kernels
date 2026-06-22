@@ -7,7 +7,6 @@ from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import mlir_namedtuple, ParamsBase
 from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, VecReduce, EpiOp
 from quack.epi_composable import ComposableEpiMixin
-from quack.gemm_act import GemmActMixin
 from quack.rounding import RoundingMode
 
 
@@ -29,7 +28,7 @@ class Epilogue(object):
     def cache_key(self) -> tuple:
         return (type(self).__name__,)
 
-    def aux_store_mixin(self) -> type | None:
+    def auxiliary_mixin(self) -> type | None:
         return None
 
     def bind(self, name: str, gemm_cls: type) -> type:
@@ -47,10 +46,10 @@ class _Composite(Epilogue):
     def cache_key(self) -> tuple:
         return tuple(child.cache_key() for child in self._children)
 
-    def aux_store_mixin(self) -> type | None:
+    def auxiliary_mixin(self) -> type | None:
         mixins = []
         for child in self._children:
-            mixin = child.aux_store_mixin()
+            mixin = child.auxiliary_mixin()
             if mixin is not None and mixin not in mixins:
                 mixins.append(mixin)
         if len(mixins) == 1:
@@ -165,19 +164,20 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
 
     class EpiMixin(ComposableEpiMixin):
         _epi_ops = ops
-        _has_aux = aux_op is not None
-        _aux_epi_tile_fn = aux_op.epi_tile_fn if aux_op is not None else None
+        _aux_op = aux_op
         _epilogue = epilogue
         EpilogueArguments = _make_args(fields)
 
         def epi_to_underlying_arguments(self, args: EpilogueArguments, *, loc=None, ip=None):
             self.rounding_mode = args.rounding_mode
-            if self._has_aux:
+            aux_op = self._aux_op
+            if aux_op is not None:
                 self.aux_out_dtype = args.mAuxOut.element_type
                 self.aux_out_layout = cutlass.utils.LayoutEnum.from_tensor(args.mAuxOut)
                 cta_tile_shape_mn = self.cta_tile_shape_mnk[:2]
-                if self._aux_epi_tile_fn is not None:
-                    self.cta_tile_shape_aux_out_mn = self._aux_epi_tile_fn(cta_tile_shape_mn)
+
+                if aux_op.epi_tile_fn is not None:
+                    self.cta_tile_shape_aux_out_mn = aux_op.epi_tile_fn(self, cta_tile_shape_mn)
                 else:
                     self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
             return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
@@ -199,7 +199,7 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
             )
 
     if aux_op is not None:
-        mixin = epilogue.aux_store_mixin()
+        mixin = epilogue.auxiliary_mixin()
         assert mixin is not None
         bases = (EpiMixin, mixin, gemm_cls)
     else:
