@@ -29,6 +29,9 @@ class Epilogue(object):
     def cache_key(self) -> tuple:
         return (type(self).__name__,)
 
+    def aux_store_mixin(self) -> type | None:
+        return None
+
     def bind(self, name: str, gemm_cls: type) -> type:
         return _lower(self, name=name, gemm_cls=gemm_cls)
 
@@ -43,6 +46,20 @@ class _Composite(Epilogue):
 
     def cache_key(self) -> tuple:
         return tuple(child.cache_key() for child in self._children)
+
+    def aux_store_mixin(self) -> type | None:
+        mixins = []
+        for child in self._children:
+            mixin = child.aux_store_mixin()
+            if mixin is not None and mixin not in mixins:
+                mixins.append(mixin)
+        if len(mixins) == 1:
+            return mixins[0]
+        elif len(mixins) == 0:
+            return None
+        else:
+            # only one non-default aux-store mixin can be composed onto the driver
+            raise NotImplementedError
 
     @cute.jit
     def visit(
@@ -135,13 +152,21 @@ def _make_args(fields: list[tuple]) -> type:
 
 def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
     ops = _normalize(epilogue.declares())
-    has_aux = any(isinstance(op, TileStore) for op in ops)
+    aux_ops = [op for op in ops if isinstance(op, TileStore)]
+    if len(aux_ops) == 1:
+        aux_op = aux_ops[0]
+    elif len(aux_ops) == 0:
+        aux_op = None
+    else:
+        raise NotImplementedError
+
     fields = [_arg_field(op) for op in ops]
     fields.append(("rounding_mode", cutlass.Constexpr[int], RoundingMode.RN))
 
     class EpiMixin(ComposableEpiMixin):
         _epi_ops = ops
-        _has_aux = has_aux
+        _has_aux = aux_op is not None
+        _aux_epi_tile_fn = aux_op.epi_tile_fn if aux_op is not None else None
         _epilogue = epilogue
         EpilogueArguments = _make_args(fields)
 
@@ -150,7 +175,11 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
             if self._has_aux:
                 self.aux_out_dtype = args.mAuxOut.element_type
                 self.aux_out_layout = cutlass.utils.LayoutEnum.from_tensor(args.mAuxOut)
-                self.cta_tile_shape_aux_out_mn = self.cta_tile_shape_mnk[:2]
+                cta_tile_shape_mn = self.cta_tile_shape_mnk[:2]
+                if self._aux_epi_tile_fn is not None:
+                    self.cta_tile_shape_aux_out_mn = self._aux_epi_tile_fn(cta_tile_shape_mn)
+                else:
+                    self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
             return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
 
         @cute.jit
@@ -169,9 +198,10 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
                 tRS_rC=tRS_rC,
             )
 
-    if has_aux:
-        # `GemmActMixin` handles the auxiliary stores
-        bases = (EpiMixin, GemmActMixin, gemm_cls)
+    if aux_op is not None:
+        mixin = epilogue.aux_store_mixin()
+        assert mixin is not None
+        bases = (EpiMixin, mixin, gemm_cls)
     else:
         bases = (EpiMixin, gemm_cls)
 
