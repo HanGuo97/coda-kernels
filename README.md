@@ -15,6 +15,9 @@
 </p>
 
 
+## Updates
+- June 23, 2026. We are restructuring CODA. For legacy version, please check `v1` tag.
+
 ## Installation
 
 ```bash
