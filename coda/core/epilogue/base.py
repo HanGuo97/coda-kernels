@@ -1,224 +1,209 @@
 import cutlass
 import cutlass.cute as cute
-from typing import NamedTuple
-from dataclasses import dataclass
+from dataclasses import MISSING
+from typing import Iterable, NamedTuple
 
-from coda.core.ops import struct_utils
+from quack.gemm_sm90 import GemmSm90
+from quack.cute_dsl_utils import mlir_namedtuple, ParamsBase
+from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, VecReduce, EpiOp
+from quack.epi_composable import ComposableEpiMixin
+from quack.rounding import RoundingMode
 
 
-class EpilogueSharedStorage(object):
-    pass
+class Epilogue(object):
 
+    def declares(self) -> tuple[EpiOp, ...]:
+        return ()
 
-class EpilogueVisitorTree(object):
-
-    @struct_utils.mlir_namedtuple
-    class EpilogueArguments(NamedTuple):
-        # Host side
-        pass
-
-    @struct_utils.register_pytree_dataclass
-    @dataclass
-    class EpilogueParams(struct_utils.PyTreeDynamicExpression):
-        # Device side
-        pass
-
-    @struct_utils.register_pytree_dataclass
-    @dataclass
-    class EpilogueTensorsSMem(struct_utils.PyTreeDynamicExpression):
-        pass
-
-    @struct_utils.register_pytree_dataclass
-    @dataclass
-    class EpilogueTensors(struct_utils.PyTreeDynamicExpression):
-        pass
-
-    @struct_utils.register_pytree_dataclass
-    @dataclass
-    class EpilogueTensorsLoop(struct_utils.PyTreeDynamicExpression):
-        pass
-
-    @struct_utils.register_pytree_dataclass
-    @dataclass
-    class EpiloguePipelines(struct_utils.PyTreeDynamicExpression):
-        pass
-
-    @cute.jit
-    def to_underlying_arguments(
+    def visit(
         self,
-        epi_tile: cute.Tile,
-        epi_stage: int,
-        epi_load_stage: int,
-        epi_args: EpilogueArguments,
-    ) -> EpilogueParams:
-        return self.EpilogueParams()
-
-    @cute.jit
-    def prefetch_tma_descriptors(
-        self,
-        epi_params: EpilogueParams,
-    ) -> None:
-        pass
-
-    @cute.jit
-    def prepare_pipelines(
-        self,
-        epi_load_stage: int,
-        epi_num_warps: int,
-        epi_params: EpilogueParams,
-        epi_tensors_smem: EpilogueTensorsSMem,
-    ) -> EpiloguePipelines:
-        return self.EpiloguePipelines()
-
-    @cute.jit
-    def advance_pipelines(
-        self,
-        tile_count: int,
-        epi_params: EpilogueParams,
-        epi_pipelines: EpiloguePipelines,
-    ) -> EpiloguePipelines:
-        return self.EpiloguePipelines()
-
-    @cute.jit
-    def consumer_begin(
-        self,
-        tiled_copy_r2s: cute.TiledCopy,
-        tile_coord_mnkl: cute.Coord,
-        tidx: cute.Int32,
-        tiled_mma: cute.TiledMma,
-        tRS_rD_layout: cute.Layout,
-        epi_tile: cute.Tile,
-        epi_num_threads: int,
-        epi_num_matrices: int,
-        epi_barrier: cutlass.pipeline.NamedBarrier,
-        epi_params: EpilogueParams,
-        epi_tensors_smem: EpilogueTensorsSMem,
-    ) -> EpilogueTensors:
-        return self.EpilogueTensors()
-
-    @cute.jit
-    def consumer_end(
-        self,
-        tiled_copy_r2s: cute.TiledCopy,
-        tile_coord_mnkl: cute.Coord,
-        tidx: cute.Int32,
-        shape_mnk: cute.Shape,
-        epi_tile: cute.Tile,
-        epi_num_threads: int,
-        epi_barrier: cutlass.pipeline.NamedBarrier,
-        epi_params: EpilogueParams,
-        epi_tensors: EpilogueTensors,
-        epi_tensors_smem: EpilogueTensorsSMem,
-    ) -> None:
-        pass
-
-    @cute.jit
-    def consumer_begin_loop(
-        self,
-        epi_coord: cute.Coord,
-        epi_params: EpilogueParams,
-        epi_tensors: EpilogueTensors,
-        epi_pipelines: EpiloguePipelines,
-    ) -> tuple[EpilogueTensorsLoop, EpiloguePipelines]:
-        return self.EpilogueTensorsLoop(), self.EpiloguePipelines()
-
-    @cute.jit
-    def consumer_end_loop(
-        self,
-        *args,
-        **kwargs,
-    ) -> None:
-        pass
-
-    @cute.jit
-    def consumer_visit(
-        self,
+        gemm: GemmSm90,
+        params: ParamsBase,
+        epi_loop_tensors: dict,
         tRS_rD: cute.Tensor,
-        shape_mnk: cute.Shape,
-        epi_params: EpilogueParams,
-        epi_tensors_loop: EpilogueTensorsLoop,
-    ) -> EpilogueTensorsLoop:
-        return self.EpilogueTensorsLoop()
+        tRS_rC: cute.Tensor | None,
+    ) -> tuple[cute.Tensor, ...]:
+        return ()
+
+    def cache_key(self) -> tuple:
+        return (type(self).__name__,)
+
+    def auxiliary_mixin(self) -> type | None:
+        return None
+
+    def bind(self, name: str, gemm_cls: type) -> type:
+        return _lower(self, name=name, gemm_cls=gemm_cls)
+
+
+class _Composite(Epilogue):
+
+    def __init__(self, epilogues: Iterable["Epilogue"]) -> None:
+        self._children = list(epilogues)
+
+    def declares(self) -> tuple[EpiOp, ...]:
+        return tuple(op for child in self._children for op in child.declares())
+
+    def cache_key(self) -> tuple:
+        return tuple(child.cache_key() for child in self._children)
+
+    def auxiliary_mixin(self) -> type | None:
+        mixins = []
+        for child in self._children:
+            mixin = child.auxiliary_mixin()
+            if mixin is not None and mixin not in mixins:
+                mixins.append(mixin)
+        if len(mixins) == 1:
+            return mixins[0]
+        elif len(mixins) == 0:
+            return None
+        else:
+            # only one non-default aux-store mixin can be composed onto the driver
+            raise NotImplementedError
 
     @cute.jit
-    def consumer_smem_store(
+    def visit(
         self,
-        epi_coord: cute.Coord,
-        epi_buffer: cute.Int32,
-        epi_params: EpilogueParams,
-        epi_tensors_loop: EpilogueTensorsLoop,
-    ) -> None:
-        pass
-
-    @cute.jit
-    def consumer_tma_store(
-        self,
-        epi_coord: cute.Coord,
-        epi_buffer: cute.Int32,
-        epi_params: EpilogueParams,
-        epi_tensors_loop: EpilogueTensorsLoop,
-    ) -> None:
-        pass
-
-    @cute.jit
-    def producer_begin(
-        self,
-        is_tma_warp: cute.Boolean,
-        epi_load_stage: int,
-        epi_tile_num: cute.Int32,
-        epi_tile_layout: cute.Layout,
-        epi_params: EpilogueParams,
-        epi_tensors: EpilogueTensors,
-        epi_pipelines: EpiloguePipelines,
-    ) -> EpiloguePipelines:
-        return self.EpiloguePipelines()
-
-    @cute.jit
-    def producer_tma_load(
-        self,
-        is_tma_warp: cute.Boolean,
-        epi_idx: int,
-        epi_load_stage: int,
-        epi_tile_num: int,
-        epi_tile_layout: cute.Layout,
-        epi_params: EpilogueParams,
-        epi_tensors: EpilogueTensors,
-        epi_pipelines: EpiloguePipelines,
-    ) -> EpiloguePipelines:
-        return self.EpiloguePipelines()
-
-    @cute.jit
-    def get_smem_struct(
-        self,
-        epi_load_stage: int,
-        epi_num_threads: int,
-        epi_params: EpilogueParams,
-    ) -> type[EpilogueSharedStorage]:
-
-        @cute.struct
-        class SharedStorage(EpilogueSharedStorage):
-            _placeholder: cute.struct.Align[cute.struct.MemRange[cute.Float32, 0], 16]
-
-        return SharedStorage
-
-    @cute.jit
-    def get_smem_tensors(
-        self,
-        storage: EpilogueSharedStorage,
-        epi_num_threads: int,
-        epi_params: EpilogueParams,
-    ) -> EpilogueTensorsSMem:
-        return self.EpilogueTensorsSMem()
-
-    @cute.jit
-    def get_smem_bytes_per_stage(
-        self,
-        epi_tile: cute.Tile,
-        epi_num_threads: int,
-        epi_args: EpilogueArguments,
-    ) -> tuple[int, int, int]:
-        return 0, 0, 0
+        gemm: GemmSm90,
+        params: ParamsBase,
+        epi_loop_tensors: dict,
+        tRS_rD: cute.Tensor,
+        tRS_rC: cute.Tensor | None,
+    ) -> tuple[cute.Tensor, ...]:
+        tRS_rAuxOuts = []
+        for child in self._children:
+            tRS_rAuxOuts.extend(
+                child.visit(
+                    gemm=gemm,
+                    params=params,
+                    epi_loop_tensors=epi_loop_tensors,
+                    tRS_rD=tRS_rD,
+                    tRS_rC=tRS_rC,
+                )
+            )
+        if cutlass.const_expr(len(tRS_rAuxOuts) > 1):
+            raise NotImplementedError
+        return tuple(tRS_rAuxOuts)
 
 
-class EVTNoOp(EpilogueVisitorTree):
-    pass
+def compose(epilogues: Iterable["Epilogue"]) -> "Epilogue":
+    return _Composite(list(epilogues))
+
+
+def _arg_field(op: EpiOp) -> tuple:
+    if isinstance(op, Scalar):
+        if op.dtype is None:
+            # if `dtype` is None, quack defaults to FP32
+            # https://github.com/Dao-AILab/quack/blob/v0.5.2/quack/epi_ops.py#L281
+            dtype = cute.Float32
+        else:
+            dtype = op.dtype
+        return (op.name, dtype | cute.Tensor | None, None)
+    if isinstance(op, (RowVecLoad, ColVecLoad, TileLoad, VecReduce)):
+        return (op.name, cute.Tensor | None, None)
+    if isinstance(op, TileStore):
+        return (op.name, cute.Tensor, MISSING)
+    raise TypeError(f"unknown op {op!r}")
+
+
+def _ops_compatible(op_a: EpiOp, op_b: EpiOp) -> bool:
+    return all([
+        type(op_a) is type(op_b),
+        _arg_field(op_a) == _arg_field(op_b),
+        getattr(op_a, "epi_tile_fn", None) is getattr(op_b, "epi_tile_fn", None),
+    ])
+
+
+def _normalize(ops: Iterable[EpiOp]) -> tuple[EpiOp, ...]:
+    ops_dict = {}
+    ops_normalized = []
+    for op in ops:
+        op_prev = ops_dict.get(op.name)
+        if op_prev is None:
+            # new op
+            ops_dict[op.name] = op
+            ops_normalized.append(op)
+        elif not _ops_compatible(op, op_prev):
+            # duplicate but incompatible op
+            raise ValueError
+
+    # we only support one output for now
+    if sum(isinstance(op, TileStore) for op in ops_normalized) > 1:
+        raise NotImplementedError
+
+    return tuple(ops_normalized)
+
+
+def _make_args(fields: list[tuple]) -> type:
+    required = []
+    optional = []
+    optional_vals = []
+    for name, annotation, default in fields:
+        if default is MISSING:
+            required.append((name, annotation))
+        else:
+            optional.append((name, annotation))
+            optional_vals.append(default)
+    cls = NamedTuple("EpilogueArguments", required + optional)
+    # `__defaults__` bind to trailing parameters
+    cls.__new__.__defaults__ = tuple(optional_vals)
+    return mlir_namedtuple(cls)
+
+
+def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
+    ops = _normalize(epilogue.declares())
+    aux_ops = [op for op in ops if isinstance(op, TileStore)]
+    if len(aux_ops) == 1:
+        aux_op = aux_ops[0]
+    elif len(aux_ops) == 0:
+        aux_op = None
+    else:
+        raise NotImplementedError
+
+    fields = [_arg_field(op) for op in ops]
+    fields.append(("rounding_mode", cutlass.Constexpr[int], RoundingMode.RN))
+
+    class EpiMixin(ComposableEpiMixin):
+        _epi_ops = ops
+        _aux_op = aux_op
+        _epilogue = epilogue
+        EpilogueArguments = _make_args(fields)
+
+        def epi_to_underlying_arguments(self, args: EpilogueArguments, *, loc=None, ip=None):
+            self.rounding_mode = args.rounding_mode
+            aux_op = self._aux_op
+            if aux_op is not None:
+                self.aux_out_dtype = args.mAuxOut.element_type
+                self.aux_out_layout = cutlass.utils.LayoutEnum.from_tensor(args.mAuxOut)
+                cta_tile_shape_mn = self.cta_tile_shape_mnk[:2]
+
+                if aux_op.epi_tile_fn is not None:
+                    self.cta_tile_shape_aux_out_mn = aux_op.epi_tile_fn(self, cta_tile_shape_mn)
+                else:
+                    self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
+            return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
+
+        @cute.jit
+        def epi_visit_subtile(
+            self,
+            params: ParamsBase,
+            epi_loop_tensors: dict,
+            tRS_rD: cute.Tensor,
+            tRS_rC: cute.Tensor | None,
+        ) -> tuple[cute.Tensor, ...]:
+            return self._epilogue.visit(
+                gemm=self,
+                params=params,
+                epi_loop_tensors=epi_loop_tensors,
+                tRS_rD=tRS_rD,
+                tRS_rC=tRS_rC,
+            )
+
+    if aux_op is not None:
+        mixin = epilogue.auxiliary_mixin()
+        assert mixin is not None
+        bases = (EpiMixin, mixin, gemm_cls)
+    else:
+        bases = (EpiMixin, gemm_cls)
+
+    # https://github.com/Dao-AILab/quack/blob/v0.5.2/quack/gemm_act.py#L295
+    return type(name, bases, {})

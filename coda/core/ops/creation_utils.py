@@ -9,7 +9,7 @@ def allocate_tensor_from_shape(
     order: tuple | str,
     dtype: type[cute.Numeric],
     memspace: str,
-    smem_allocator: cutlass.utils.SmemAllocator,
+    smem_allocator: cutlass.utils.SmemAllocator | None = None,
     **kwargs,
 ) -> cute.Tensor:
     layout = make_ordered_layout(
@@ -29,7 +29,7 @@ def allocate_tensor_from_layout(
     layout: cute.Layout,
     dtype: type[cute.Numeric],
     memspace: str,
-    smem_allocator: cutlass.utils.SmemAllocator,
+    smem_allocator: cutlass.utils.SmemAllocator | None = None,
     **kwargs,
 ) -> cute.Tensor:
     if cutlass.const_expr(memspace == "rmem"):
@@ -53,7 +53,7 @@ def allocate_tensor_from_recast_layout(
     old_type_bits: int,
     dtype: type[cute.Numeric],
     memspace: str,
-    smem_allocator: cutlass.utils.SmemAllocator,
+    smem_allocator: cutlass.utils.SmemAllocator | None = None,
     **kwargs,
 ) -> cute.Tensor:
     layout = cute.recast_layout(
@@ -73,7 +73,7 @@ def allocate_tensor_from_recast_layout(
 def allocate_tensor_like(
     tensor: cute.Tensor,
     memspace: str,
-    smem_allocator: cutlass.utils.SmemAllocator,
+    smem_allocator: cutlass.utils.SmemAllocator | None = None,
     dtype: type[cute.Numeric] | None = None,
     **kwargs,
 ) -> cute.Tensor:
