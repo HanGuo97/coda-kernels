@@ -9,10 +9,24 @@ from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, V
 from quack.epi_composable import ComposableEpiMixin
 from quack.rounding import RoundingMode
 
+FieldSpec = tuple[str, object, object]
+
+
+class Const(NamedTuple):
+    name: str
+    ty: type
+    default: object = None
+
+    def field(self) -> FieldSpec:
+        return (self.name, cutlass.Constexpr[self.ty], self.default)
+
 
 class Epilogue(object):
 
     def declares(self) -> tuple[EpiOp, ...]:
+        return ()
+
+    def declare_constexprs(self) -> tuple[Const, ...]:
         return ()
 
     def visit(
@@ -42,6 +56,9 @@ class _Composite(Epilogue):
 
     def declares(self) -> tuple[EpiOp, ...]:
         return tuple(op for child in self._children for op in child.declares())
+
+    def declare_constexprs(self) -> tuple[Const, ...]:
+        return tuple(c for child in self._children for c in child.declare_constexprs())
 
     def cache_key(self) -> tuple:
         return tuple(child.cache_key() for child in self._children)
@@ -89,7 +106,7 @@ def compose(epilogues: Iterable["Epilogue"]) -> "Epilogue":
     return _Composite(list(epilogues))
 
 
-def _arg_field(op: EpiOp) -> tuple:
+def _arg_field(op: EpiOp) -> FieldSpec:
     if isinstance(op, Scalar):
         if op.dtype is None:
             # if `dtype` is None, quack defaults to FP32
@@ -133,7 +150,7 @@ def _normalize(ops: Iterable[EpiOp]) -> tuple[EpiOp, ...]:
     return tuple(ops_normalized)
 
 
-def _make_args(fields: list[tuple]) -> type:
+def _make_args(fields: list[FieldSpec]) -> type:
     required = []
     optional = []
     optional_vals = []
@@ -159,11 +176,14 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
     else:
         raise NotImplementedError
 
+    epi_const_fields = tuple(c.field() for c in epilogue.declare_constexprs())
     fields = [_arg_field(op) for op in ops]
     fields.append(("rounding_mode", cutlass.Constexpr[int], RoundingMode.RN))
+    fields.extend(epi_const_fields)
 
     class EpiMixin(ComposableEpiMixin):
         _epi_ops = ops
+        _extra_param_fields = epi_const_fields
         _aux_op = aux_op
         _epilogue = epilogue
         EpilogueArguments = _make_args(fields)
@@ -180,7 +200,11 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
                     self.cta_tile_shape_aux_out_mn = aux_op.epi_tile_fn(self, cta_tile_shape_mn)
                 else:
                     self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
-            return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
+
+            d = self._epi_ops_to_params_dict(args)
+            for name, _, _ in self._extra_param_fields:
+                d[name] = getattr(args, name)
+            return self.EpilogueParams(**d)
 
         @cute.jit
         def epi_visit_subtile(
