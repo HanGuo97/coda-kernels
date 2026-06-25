@@ -1,116 +1,23 @@
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 import torch
-import warnings
 import cutlass
 import cutlass.cute as cute
-import cutlass.torch as cutlass_torch
-from typing import Callable, NamedTuple
-from torch.utils import _pytree as pytree
-from quack.autotuner import autotune, AutotuneConfig
-from quack.cute_dsl_utils import get_max_active_clusters
+
+from quack.cache import jit_cache
+from quack.compile_utils import make_fake_tensor as fake_tensor
+from quack.cute_dsl_utils import get_device_capacity, torch2cute_dtype_map
+from quack.gemm_sm90 import GemmSm90
+
 from quack.gemm_tvm_ffi_utils import (
-    make_scheduler_args,
+    compile_gemm_kernel,
+    get_dtypes,
+    get_majors,
+    make_fake_gemm_tensors,
     make_fake_scheduler_args,
+    make_fake_varlen_args,
+    make_scheduler_args,
+    make_varlen_args,
+    perm3d,
 )
-
-from coda.core.ops import misc_utils
-from coda.core.ops.gemm_utils import (
-    get_major,
-    is_valid_dtypes,
-    is_valid_tensor_alignment,
-)
-from coda.core.gemm import gemm_quack
-from coda.core.epilogue import (
-    EVTNoOp,
-    EpilogueVisitorTree,
-)
-
-# Default: Quack's GEMM template with Ping-Pong Persistent kernel.
-# Use autotuning for optimal performance.
-ACC_DTYPE = cute.Float32
-USE_QUACK = True
-IS_PERSISTENT = True
-PERMUTE_BATCH = False
-DYNAMIC_SCHEDULER = False
-DEFAULT_PINGPONG = True
-DEFAULT_TILE_M = 128
-DEFAULT_TILE_N = 128
-DEFAULT_CLUSTER_M = 1
-DEFAULT_CLUSTER_N = 1
-
-
-def to_cute_tensor(
-    torch_tensor: torch.Tensor,
-    assumed_align: int = 16,
-    leading_dim: int | None = None,
-) -> cute.Tensor:
-    torch_tensor = torch_tensor.detach()
-    cute_tensor = cute.runtime.from_dlpack(
-        torch_tensor,
-        assumed_align=assumed_align,
-        enable_tvm_ffi=True,
-    )
-    if leading_dim is not None:
-        cute_tensor = cute_tensor.mark_layout_dynamic(
-            leading_dim=leading_dim
-        )
-
-    return cute_tensor
-
-
-def to_cute_tensor_or_vector(
-    torch_tensor: torch.Tensor,
-) -> cute.Tensor:
-    assert isinstance(torch_tensor, torch.Tensor)
-
-    # [L, *]
-    if torch_tensor.ndim == 2:
-        assert torch_tensor.shape[0] == 1
-        if torch_tensor.dtype.itemsize == 8:
-            # occasionally using 4 will break `cp.async`
-            assumed_align = 8
-        else:
-            assumed_align = 4
-
-    # [L, *, *] or [*, *, L]
-    elif torch_tensor.ndim == 3:
-        assert torch_tensor.shape[0] == 1 or torch_tensor.shape[2] == 1
-        assumed_align = 16
-
-    else:
-        raise NotImplementedError
-
-    return to_cute_tensor(
-        torch_tensor,
-        assumed_align=assumed_align,
-    )
 
 
 def preprocess_vector(
@@ -161,285 +68,75 @@ def preprocess_tensor(
 
 
 def gemm_epilogue(
+    GemmCls: type,
     A: torch.Tensor,
     B: torch.Tensor,
-    C: torch.Tensor,
-    epi_cls: Callable[[object], EpilogueVisitorTree],
-    epi_args: EpilogueVisitorTree.EpilogueArguments,
-    epi_keys: tuple,
+    D: torch.Tensor | None,
+    C: torch.Tensor | None,
+    tile_count_semaphore: torch.Tensor | None,
+    tile_M: int,
+    tile_N: int,
+    cluster_M: int,
+    cluster_N: int,
+    tile_K: int | None,
     pingpong: bool,
-    tile_shape_mn: tuple[int, int],
-    cluster_shape_mn: tuple[int, int],
-    add_to_output: bool,
+    persistent: bool,
+    is_dynamic_persistent: bool,
+    max_swizzle_size: int,
 ) -> None:
 
-    M, N, L = C.shape
-    _, K, _ = A.shape
-    assert A.shape == (M, K, L)
-    assert B.shape == (N, K, L)
-    assert C.shape == (M, N, L)
-    assert A.dtype == B.dtype
+    A_p = perm3d_single(A, varlen_m=False)
+    B_p = perm3d_single(B, varlen_m=False)
+    D_p = perm3d_single(D, varlen_m=False)
+    C_p = perm3d_single(C, varlen_m=False)
 
-    compile_key = (
-        M,
-        N,
-        K,
-        L,
-        A.shape,
-        B.shape,
-        C.shape,
-        A.stride(),
-        B.stride(),
-        C.stride(),
-        A.dtype,
-        B.dtype,
-        C.dtype,
-        ACC_DTYPE,
-        tile_shape_mn,
-        cluster_shape_mn,
-        USE_QUACK,
-        pingpong,
-        add_to_output,
-        *epi_keys,
+    device_capacity = get_device_capacity(A.device)
+    assert device_capacity[0] in [8, 9, 10, 11, 12], (
+        "Only SM8x, SM90, SM100, SM110, and SM120 are supported"
+    )
+    if rounding_mode == RoundingMode.RS:
+        assert device_capacity[0] == 10, "Stochastic rounding (RoundingMode.RS) requires SM100"
+
+    if is_dynamic_persistent and device_capacity[0] == 9:
+        assert tile_count_semaphore is not None, (
+            "Dynamic persistent tile scheduler in SM90 requires a semaphore in GMEM"
+        )
+
+    compiled_fn = _compile(
+        a_dtype=torch2cute_dtype_map[A.dtype],
+        b_dtype=torch2cute_dtype_map[B.dtype],
+        d_dtype=torch2cute_dtype_map[D.dtype] if D is not None else None,
+        c_dtype=torch2cute_dtype_map[C.dtype] if C is not None else None,
+        a_major=get_major(A_p, "m", "k"),
+        b_major=get_major(B_p, "n", "k"),
+        d_major=get_major(D_p, "m", "n") if D_p is not None else None,
+        c_major=get_major(C_p, "m", "n") if C_p is not None else None,
+        tile_M=tile_M,
+        tile_N=tile_N,
+        tile_K=tile_K,
+        cluster_M=cluster_M,
+        cluster_N=cluster_N,
+        pingpong=pingpong,
+        persistent=persistent,
+        is_dynamic_persistent=is_dynamic_persistent,
+        device_capacity=device_capacity,
+        gemm_cls_name=GemmCls.__name__,
     )
 
-    if IS_PERSISTENT:
-        max_active_clusters = get_max_active_clusters(
-            cluster_shape_mn[0] *
-            cluster_shape_mn[1]
-        )
-    else:
-        max_active_clusters = 0
+    max_active_clusters = get_max_active_clusters(cluster_M * cluster_N) if persistent else 0
 
-    if IS_PERSISTENT and DYNAMIC_SCHEDULER:
-        tile_count_semaphore = torch.zeros(
-            1,
-            dtype=torch.int32,
-            device=A.device,
-        )
-    else:
-        tile_count_semaphore = None
-
-    if PERMUTE_BATCH:
-        raise NotImplementedError
-    else:
-        batch_idx_permute = None
-
-    if compile_key not in gemm_epilogue.compile_cache:
-        warnings.warn(
-            f"Kernel compilation cache miss for compile_key={compile_key}. "
-            f"This will trigger JIT compilation and may be slow.",
-        )
-        if USE_QUACK:
-            _gemm = gemm_quack.HopperWgmmaGemmKernelQuack(
-                acc_dtype=ACC_DTYPE,
-                tile_shape_mn=tile_shape_mn,
-                cluster_shape_mnk=(*cluster_shape_mn, 1),
-                epilogue_visitor_tree_cls=epi_cls,
-                pingpong=pingpong,
-                is_persistent=IS_PERSISTENT,
-                add_to_output=add_to_output,
-            )
-        else:
-            raise NotImplementedError
-
-        A_cute = to_cute_tensor(A)
-        B_cute = to_cute_tensor(B)
-        C_cute = to_cute_tensor(C)
-        epi_args_cute = pytree.tree_map_only(
-            torch.Tensor,
-            func=to_cute_tensor_or_vector,
-            tree=epi_args,
-        )
-
-        if not is_valid_dtypes(
-            a_dtype=misc_utils.get_dtype(A_cute),
-            b_dtype=misc_utils.get_dtype(B_cute),
-            acc_dtype=ACC_DTYPE,
-            c_dtype=misc_utils.get_dtype(C_cute),
-            a_major=get_major(A_cute, dims=("m", "k", "l")),
-            b_major=get_major(B_cute, dims=("n", "k", "l")),
-        ):
-            raise TypeError
-
-        if not is_valid_tensor_alignment(
-            m=M,
-            n=N,
-            k=K,
-            l=L,
-            ab_dtype=misc_utils.get_dtype(A_cute),
-            c_dtype=misc_utils.get_dtype(C_cute),
-            a_major=get_major(A_cute, dims=("m", "k", "l")),
-            b_major=get_major(B_cute, dims=("n", "k", "l")),
-            c_major=get_major(C_cute, dims=("m", "n", "l")),
-        ):
-            raise TypeError
-
-        fake_scheduler_args = make_fake_scheduler_args(
-            has_semaphore=(tile_count_semaphore is not None),
-            has_batch_idx_permute=(batch_idx_permute is not None),
-            l_sym=1,
-        )
-        stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
-        gemm_epilogue.compile_cache[compile_key] = cute.compile(
-            _gemm,
-            A_cute,
-            B_cute,
-            C_cute,
-            epi_args_cute,
-            fake_scheduler_args,
-            stream,
-            options="--enable-tvm-ffi",
-        )
-
+    epi_args = GemmCls.EpilogueArguments(
+        add_to_output=None,
+        rounding_mode=None,
+        sr_seed=None,
+    )
     scheduler_args = make_scheduler_args(
-        max_active_clusters=max_active_clusters,
-        max_swizzle_size=8,
-        tile_count_semaphore=tile_count_semaphore,
-        batch_idx_permute=batch_idx_permute,
-    )
-    gemm_epilogue.compile_cache[compile_key](
-        A,
-        B,
-        C,
-        epi_args,
-        scheduler_args,
+        max_active_clusters,
+        max_swizzle_size,
+        tile_count_semaphore,
     )
 
-
-gemm_epilogue.compile_cache = {}
-
-
-class GemmConfig(NamedTuple):
-    tile_m: int
-    tile_n: int
-    cluster_m: int
-    cluster_n: int
-    pingpong: bool
-
-
-GemmConfigOptions = [
-    AutotuneConfig(
-        config=GemmConfig(
-            tile_m=tile_m,
-            tile_n=tile_n,
-            cluster_m=cluster_m,
-            cluster_n=cluster_n,
-            pingpong=pingpong,
-        ),
-    )
-    for tile_m in [64, 128, 192, 256]
-    for tile_n in [64, 128, 192, 256]
-    for cluster_m in [1, 2]
-    for cluster_n in [1, 2]
-    for pingpong in [True, False]
-]
-
-
-GemmConfigOptions2 = [
-    gemm_config
-    for gemm_config in GemmConfigOptions
-    if not all([
-        gemm_config.kwargs["config"].tile_m == 192,
-        gemm_config.kwargs["config"].tile_n >= 192,
-        gemm_config.kwargs["config"].pingpong is False,
-    ])
-]
-
-
-def _gemm_epilogue_tuned(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    C: torch.Tensor,
-    epi_cls: Callable[[object], EpilogueVisitorTree],
-    epi_args: EpilogueVisitorTree.EpilogueArguments,
-    epi_keys: tuple,
-    add_to_output: bool,
-    config: GemmConfig,
-) -> None:
-    return gemm_epilogue(
-        A=A,
-        B=B,
-        C=C,
-        epi_cls=epi_cls,
-        epi_args=epi_args,
-        epi_keys=epi_keys,
-        pingpong=config.pingpong,
-        tile_shape_mn=(config.tile_m, config.tile_n),
-        cluster_shape_mn=(config.cluster_m, config.cluster_n),
-        add_to_output=add_to_output,
-    )
-
-
-gemm_epilogue_tuned = (
-    autotune(
-        configs=GemmConfigOptions2,
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-)
-
-
-gemm_epilogue_tuned_restricted = (
-    autotune(
-        configs=GemmConfigOptions2,
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-)
-
-
-gemm_epilogue_tuned_dict_m = {
-    tile_m: autotune(
-        configs=[
-            gemm_config
-            for gemm_config in GemmConfigOptions
-            if gemm_config.kwargs["config"].tile_m == tile_m
-        ],
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-    for tile_m in [64, 128, 192, 256]
-}
-
-
-gemm_epilogue_tuned_restricted_dict_m = {
-    tile_m: autotune(
-        configs=[
-            gemm_config
-            for gemm_config in GemmConfigOptions2
-            if gemm_config.kwargs["config"].tile_m == tile_m
-        ],
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-    for tile_m in [64, 128, 192, 256]
-}
-
-
-gemm_epilogue_tuned_dict_n = {
-    tile_n: autotune(
-        configs=[
-            gemm_config
-            for gemm_config in GemmConfigOptions
-            if gemm_config.kwargs["config"].tile_n == tile_n
-        ],
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-    for tile_n in [64, 128, 192, 256]
-}
-
-
-gemm_epilogue_tuned_restricted_dict_n = {
-    tile_n: autotune(
-        configs=[
-            gemm_config
-            for gemm_config in GemmConfigOptions2
-            if gemm_config.kwargs["config"].tile_n == tile_n
-        ],
-        key=["epi_keys"],
-        cache_results=False,
-    )(_gemm_epilogue_tuned)
-    for tile_n in [64, 128, 192, 256]
-}
+    if device_capacity[0] in [10, 11]:
+        compiled_fn(A_p, B_p, D_p, C_p, epi_args, scheduler_args, None, None, None)
+    else:
+        compiled_fn(A_p, B_p, D_p, C_p, epi_args, scheduler_args, None)
