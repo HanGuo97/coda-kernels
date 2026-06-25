@@ -13,3 +13,11 @@ GemmSwiGLU = (
         gemm_cls=GemmSm90,
     )
 )
+
+
+_REGISTRY = {
+    _gemm.__name__: _gemm
+    for _gemm in (
+        GemmSwiGLU,
+    )
+}
