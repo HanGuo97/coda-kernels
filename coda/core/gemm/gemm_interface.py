@@ -74,17 +74,17 @@ def _compile_gemm(
     b_dtype: type[cute.Numeric],
     d_dtype: type[cute.Numeric],
     c_dtype: type[cute.Numeric],
-    a_major: int,
-    b_major: int,
-    d_major: int,
-    c_major: int,
+    a_major: str,
+    b_major: str,
+    d_major: str,
+    c_major: str,
     tile_shape_mnk: tuple[int, ...],
     cluster_shape_mnk: tuple[int, ...],
     pingpong: bool,
     persistent: bool,
     is_dynamic_persistent: bool,
     add_to_output: bool,
-    concat_layout: dict | None,
+    concat_layout: tuple | None,
     varlen_m: bool,
     varlen_k: bool,
     gather_A: bool,
@@ -107,6 +107,7 @@ def _compile_gemm(
         d_major,
         c_major,
         varlen_m=varlen_m,
+        varlen_k=varlen_k,
         gather_A=gather_A,
     )
 
@@ -116,15 +117,16 @@ def _compile_gemm(
         sr_seed=None,
     )
     scheduler_args = make_fake_scheduler_args(
-        has_semaphore=(is_dynamic_persistent and device_capacity[0] == 9),
-        has_batch_idx_permute=False,
+        has_semaphore=(is_dynamic_persistent and device_capacity[0] <= 9),
+        has_batch_idx_permute=has_batch_idx_permute,
         l_sym=l,
     )
+    aidx_len = m if varlen_m else (k if varlen_k else None)
     varlen_args = make_fake_varlen_args(
         varlen_m=varlen_m,
-        varlen_k=False,
+        varlen_k=varlen_k,
         gather_A=gather_A,
-        aidx_len=m if varlen_m else None,
+        aidx_len=aidx_len,
     )
     if device_capacity[0] == 9:
         extra_kwargs = {"pingpong": pingpong, "is_persistent": persistent}
@@ -132,10 +134,10 @@ def _compile_gemm(
         raise NotImplementedError
 
     _gemm = GemmCls(
-        cute.Float32,
-        a_dtype,
-        tile_shape_mnk,
-        cluster_shape_mnk,
+        acc_dtype=cute.Float32,
+        a_dtype=a_dtype,
+        tile_shape_mnk=tile_shape_mnk,
+        cluster_shape_mnk=cluster_shape_mnk,
         gather_A=gather_A,
         concat_layout=concat_layout,
         **extra_kwargs,
