@@ -4,9 +4,12 @@ import cutlass.cute as cute
 
 from quack.cache import jit_cache
 from quack.compile_utils import make_fake_tensor as fake_tensor
-from quack.cute_dsl_utils import get_device_capacity, torch2cute_dtype_map
-from quack.gemm_sm90 import GemmSm90
-
+from quack.rounding import RoundingMode
+from quack.cute_dsl_utils import (
+    get_device_capacity,
+    get_max_active_clusters,
+    torch2cute_dtype_map,
+)
 from quack.gemm_tvm_ffi_utils import (
     compile_gemm_kernel,
     get_dtypes,
@@ -86,15 +89,12 @@ def gemm_epilogue(
     max_swizzle_size: int,
     batch_idx_permute: torch.Tensor | None,
     add_to_output: bool,
-    rounding_mode: RoundingMode,
 ) -> None:
 
     device_capacity = get_device_capacity(A.device)
     assert device_capacity[0] in [8, 9, 10, 11, 12], (
         "Only SM8x, SM90, SM100, SM110, and SM120 are supported"
     )
-    if rounding_mode == RoundingMode.RS:
-        raise NotImplementedError
     if is_dynamic_persistent and device_capacity[0] <= 9:
         assert tile_count_semaphore is not None, (
             "Dynamic persistent tile scheduler for SM8x and SM90 requires a semaphore in GMEM"
@@ -133,7 +133,7 @@ def gemm_epilogue(
         use_tma_gather=False,
         has_batch_idx_permute=batch_idx_permute is not None,
         device_capacity=device_capacity,
-        rounding_mode=rounding_mode,
+        rounding_mode=RoundingMode.RN,
         sr_seed_mode=None,
         num_warps=None,
         gemm_cls_name=GemmCls.__name__,
