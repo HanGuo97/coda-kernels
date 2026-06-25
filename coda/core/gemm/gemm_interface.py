@@ -274,7 +274,7 @@ def _gemm_epilogue(
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in get_all_configs()],
-    key=["dynamic_scheduler"],
+    key=["GemmCls", "add_to_output"],
     prune_configs_by={"early_config_prune": prune_invalid_gemm_configs},
 )
 def _gemm_epilogue_tuned(
