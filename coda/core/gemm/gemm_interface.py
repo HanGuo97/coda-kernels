@@ -11,16 +11,14 @@ from quack.cute_dsl_utils import (
     torch2cute_dtype_map,
 )
 from quack.gemm_tvm_ffi_utils import (
-    compile_gemm_kernel,
-    get_dtypes,
-    get_majors,
     make_fake_gemm_tensors,
     make_fake_scheduler_args,
     make_fake_varlen_args,
     make_scheduler_args,
     make_varlen_args,
-    perm3d,
 )
+
+from coda.core.gemm.registry import _REGISTRY
 
 
 def preprocess_vector(
@@ -68,6 +66,94 @@ def preprocess_tensor(
         )
 
     return x
+
+
+@jit_cache
+def _compile_gemm(
+    a_dtype: type[cute.Numeric],
+    b_dtype: type[cute.Numeric],
+    d_dtype: type[cute.Numeric],
+    c_dtype: type[cute.Numeric],
+    a_major: int,
+    b_major: int,
+    d_major: int,
+    c_major: int,
+    tile_shape_mnk: tuple[int, ...],
+    cluster_shape_mnk: tuple[int, ...],
+    pingpong: bool,
+    persistent: bool,
+    is_dynamic_persistent: bool,
+    add_to_output: bool,
+    concat_layout: dict | None,
+    varlen_m: bool,
+    varlen_k: bool,
+    gather_A: bool,
+    use_tma_gather: bool,
+    has_batch_idx_permute: bool,
+    device_capacity: tuple[int, int],
+    rounding_mode: RoundingMode,
+    sr_seed_mode: int | None,
+    num_warps: int | None,
+    gemm_cls_name: str,
+):
+    GemmCls = _REGISTRY[gemm_cls_name]
+    mA, mB, mD, mC, m, n, k, l = make_fake_gemm_tensors(
+        a_dtype,
+        b_dtype,
+        d_dtype,
+        c_dtype,
+        a_major,
+        b_major,
+        d_major,
+        c_major,
+        varlen_m=varlen_m,
+        gather_A=gather_A,
+    )
+
+    epi_args = GemmCls.EpilogueArguments(
+        add_to_output=add_to_output,
+        rounding_mode=rounding_mode,
+        sr_seed=None,
+    )
+    scheduler_args = make_fake_scheduler_args(
+        has_semaphore=(is_dynamic_persistent and device_capacity[0] == 9),
+        has_batch_idx_permute=False,
+        l_sym=l,
+    )
+    varlen_args = make_fake_varlen_args(
+        varlen_m=varlen_m,
+        varlen_k=False,
+        gather_A=gather_A,
+        aidx_len=m if varlen_m else None,
+    )
+    if device_capacity[0] == 9:
+        extra_kwargs = {"pingpong": pingpong, "is_persistent": persistent}
+    else:
+        raise NotImplementedError
+
+    _gemm = GemmCls(
+        cute.Float32,
+        a_dtype,
+        tile_shape_mnk,
+        cluster_shape_mnk,
+        gather_A=gather_A,
+        concat_layout=concat_layout,
+        **extra_kwargs,
+    )
+
+    stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
+    return cute.compile(
+        _gemm,
+        mA,
+        mB,
+        mD,
+        mC,
+        epi_args,
+        scheduler_args,
+        varlen_args,
+        stream,
+        options="--enable-tvm-ffi",
+    )
 
 
 def gemm_epilogue(
