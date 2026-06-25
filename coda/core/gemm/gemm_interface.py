@@ -104,24 +104,22 @@ def gemm_epilogue(
             C = D
             add_to_output = False
 
-    A_p, B_p, D_p, C_p = perm3d(
-        A=A,
-        B=B,
-        D=D,
-        C=C,
-        varlen_m=False,
-        varlen_k=False,
-    )
+    M, K, L = A.shape
+    N, _, _ = B.shape
+    assert A.shape == (M, K, L)
+    assert B.shape == (N, K, L)
+    assert D is None or D.shape == (M, N, L)
+    assert C is None or C.shape == (M, N, L)
 
     compiled_fn = _compile_gemm(
         a_dtype=torch2cute_dtype_map[A.dtype],
         b_dtype=torch2cute_dtype_map[B.dtype],
         d_dtype=torch2cute_dtype_map[D.dtype] if D is not None else None,
         c_dtype=torch2cute_dtype_map[C.dtype] if C is not None else None,
-        a_major=get_major(A_p, "m", "k"),
-        b_major=get_major(B_p, "n", "k"),
-        d_major=get_major(D_p, "m", "n") if D_p is not None else None,
-        c_major=get_major(C_p, "m", "n") if C_p is not None else None,
+        a_major=get_major(A, "m", "k"),
+        b_major=get_major(B, "n", "k"),
+        d_major=get_major(D, "m", "n") if D is not None else None,
+        c_major=get_major(C, "m", "n") if C is not None else None,
         tile_shape_mnk=(tile_M, tile_N) if tile_K is None else (tile_M, tile_N, tile_K),
         cluster_shape_mnk=(cluster_M, cluster_N, cluster_K),
         pingpong=pingpong,
@@ -168,6 +166,6 @@ def gemm_epilogue(
     )
 
     if device_capacity[0] in [10, 11]:
-        compiled_fn(A_p, B_p, D_p, C_p, epi_args, scheduler_args, varlen_args, None, None)
+        compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args, None, None)
     else:
-        compiled_fn(A_p, B_p, D_p, C_p, epi_args, scheduler_args, varlen_args)
+        compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args)
