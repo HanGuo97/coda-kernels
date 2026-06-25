@@ -1,10 +1,23 @@
 import torch
 import cutlass
 import cutlass.cute as cute
+import functools
+from typing import Callable
 
 from quack.cache import jit_cache
-from quack.compile_utils import make_fake_tensor as fake_tensor
 from quack.rounding import RoundingMode
+from quack.gemm_interface import (
+    default_config,
+    prune_invalid_gemm_configs,
+)
+from quack.autotuner import (
+    autotune,
+    AutotuneConfig,
+)
+from quack.gemm_config import (
+    GemmConfig,
+    get_all_configs,
+)
 from quack.cute_dsl_utils import (
     get_device_capacity,
     get_max_active_clusters,
@@ -158,7 +171,7 @@ def _compile_gemm(
     )
 
 
-def gemm_epilogue(
+def _gemm_epilogue(
     GemmCls: type,
     A: torch.Tensor,
     B: torch.Tensor,
@@ -257,3 +270,114 @@ def gemm_epilogue(
         compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args, None, None)
     else:
         compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args)
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in get_all_configs()],
+    key=["dynamic_scheduler"],
+    prune_configs_by={"early_config_prune": prune_invalid_gemm_configs},
+)
+def _gemm_epilogue_tuned(
+    GemmCls: type,
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    C: torch.Tensor | None,
+    batch_idx_permute: torch.Tensor | None,
+    add_to_output: bool,
+    config: GemmConfig | None,
+) -> None:
+    if config is None:
+        config = default_config(A.device)
+
+    tile_count_semaphore = (
+        torch.zeros(1, dtype=torch.int32, device=A.device)
+        if config.is_dynamic_persistent and get_device_capacity(A.device)[0] == 9
+        else None
+    )
+
+    _gemm_epilogue(
+        GemmCls=GemmCls,
+        A=A if not config.swap_ab else B,
+        B=B if not config.swap_ab else A,
+        D=D if not config.swap_ab else D.mT,
+        C=(C if not config.swap_ab else C.mT) if C is not None else None,
+        tile_count_semaphore=tile_count_semaphore,
+        tile_M=config.tile_m,
+        tile_N=config.tile_n,
+        tile_K=config.tile_k,
+        cluster_M=config.cluster_m,
+        cluster_N=config.cluster_n,
+        cluster_K=config.cluster_k,
+        pingpong=config.pingpong,
+        persistent=True,
+        is_dynamic_persistent=config.is_dynamic_persistent,
+        max_swizzle_size=config.max_swizzle_size,
+        batch_idx_permute=batch_idx_permute,
+        add_to_output=add_to_output,
+    )
+
+
+def _kernel_op(
+    name: str,
+    mutates_args: tuple[str, ...],
+) -> Callable[[Callable], Callable]:
+
+    def decorator(fn: Callable) -> Callable:
+
+        @torch.library.custom_op(
+            name,
+            mutates_args=mutates_args,
+            device_types="cuda",
+        )
+        @functools.wraps(fn)
+        def op(*args, **kwargs) -> None:
+            return fn(*args, **kwargs)
+
+        @torch.library.register_fake(name)
+        def _(*args, **kwargs) -> None:
+            pass
+
+        return op
+
+    return decorator
+
+
+def _dispatch(
+    GemmCls: type,
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    batch_idx_permute: torch.Tensor | None = None,
+    add_to_output: bool = False,
+    tuned: bool = True,
+) -> None:
+
+    # Preprocess A: (M, K) -> (M, K, L) with permute
+    A = preprocess_tensor(A, permute=True, transpose=False)
+    # Preprocess B: (K, N) -> (N, K, L) with transpose + permute
+    B = preprocess_tensor(B, permute=True, transpose=True)
+    # Preprocess out: (M, N) -> (M, N, L) with permute
+    D = preprocess_tensor(D, permute=True, transpose=False)
+
+    if tuned:
+        return _gemm_epilogue_tuned(
+            GemmCls=GemmCls,
+            A=A,
+            B=B,
+            D=D,
+            C=None,
+            batch_idx_permute=batch_idx_permute,
+            add_to_output=add_to_output,
+        )
+    else:
+        return _gemm_epilogue_tuned.fn(
+            GemmCls=GemmCls,
+            A=A,
+            B=B,
+            D=D,
+            C=None,
+            batch_idx_permute=batch_idx_permute,
+            add_to_output=add_to_output,
+            config=None,
+        )
