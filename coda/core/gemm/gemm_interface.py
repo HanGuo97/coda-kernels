@@ -300,7 +300,7 @@ def _gemm_epilogue_tuned(
         GemmCls=GemmCls,
         A=A if not config.swap_ab else B,
         B=B if not config.swap_ab else A,
-        D=D if not config.swap_ab else D.mT,
+        D=(D if not config.swap_ab else D.mT) if D is not None else None,
         C=(C if not config.swap_ab else C.mT) if C is not None else None,
         tile_count_semaphore=tile_count_semaphore,
         tile_M=config.tile_m,
@@ -347,7 +347,8 @@ def _dispatch(
     GemmCls: type,
     A: torch.Tensor,
     B: torch.Tensor,
-    D: torch.Tensor,
+    D: torch.Tensor | None,
+    C: torch.Tensor | None = None,
     batch_idx_permute: torch.Tensor | None = None,
     add_to_output: bool = False,
     tuned: bool = True,
@@ -357,8 +358,10 @@ def _dispatch(
     A = preprocess_tensor(A, permute=True, transpose=False)
     # Preprocess B: (K, N) -> (N, K, L) with transpose + permute
     B = preprocess_tensor(B, permute=True, transpose=True)
-    # Preprocess out: (M, N) -> (M, N, L) with permute
-    D = preprocess_tensor(D, permute=True, transpose=False)
+    # Preprocess D: (M, N) -> (M, N, L) with permute
+    D = preprocess_tensor(D, permute=True, transpose=False) if D is not None else None
+    # Preprocess C: (M, N) -> (M, N, L) with permute
+    C = preprocess_tensor(C, permute=True, transpose=False) if C is not None else None
 
     if tuned:
         return _gemm_epilogue_tuned(
@@ -366,7 +369,7 @@ def _dispatch(
             A=A,
             B=B,
             D=D,
-            C=None,
+            C=C,
             batch_idx_permute=batch_idx_permute,
             add_to_output=add_to_output,
         )
@@ -376,7 +379,7 @@ def _dispatch(
             A=A,
             B=B,
             D=D,
-            C=None,
+            C=C,
             batch_idx_permute=batch_idx_permute,
             add_to_output=add_to_output,
             config=None,
