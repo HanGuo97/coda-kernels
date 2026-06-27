@@ -123,11 +123,13 @@ def _arg_field(op: EpiOp) -> FieldSpec:
 
 
 def _ops_compatible(op_a: EpiOp, op_b: EpiOp) -> bool:
-    return all([
-        type(op_a) is type(op_b),
-        _arg_field(op_a) == _arg_field(op_b),
-        getattr(op_a, "epi_tile_fn", None) is getattr(op_b, "epi_tile_fn", None),
-    ])
+    return all(
+        [
+            type(op_a) is type(op_b),
+            _arg_field(op_a) == _arg_field(op_b),
+            getattr(op_a, "epi_tile_fn", None) is getattr(op_b, "epi_tile_fn", None),
+        ]
+    )
 
 
 def _normalize(ops: Iterable[EpiOp]) -> tuple[EpiOp, ...]:
