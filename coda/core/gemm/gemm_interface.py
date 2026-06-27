@@ -1,7 +1,7 @@
 import torch
+import functools
 import cutlass
 import cutlass.cute as cute
-import functools
 from typing import Callable
 
 from quack.cache import jit_cache
@@ -24,14 +24,13 @@ from quack.cute_dsl_utils import (
     torch2cute_dtype_map,
 )
 from quack.gemm_tvm_ffi_utils import (
+    get_major,
     make_fake_gemm_tensors,
     make_fake_scheduler_args,
     make_fake_varlen_args,
     make_scheduler_args,
     make_varlen_args,
 )
-
-from coda.core.gemm.registry import _REGISTRY
 
 
 def preprocess_vector(
@@ -46,7 +45,7 @@ def preprocess_vector(
         raise ValueError("Input tensor must be on CUDA device")
 
     if permute:
-        # Apply permutation from (L, *, *) -> (*, *, L) for selected tensors
+        # Apply permutation from (L, *) -> (*, L) for selected tensors
         x = torch.permute(
             x,
             dims=(1, 0),
@@ -107,9 +106,9 @@ def _compile_gemm(
     rounding_mode: RoundingMode,
     sr_seed_mode: int | None,
     num_warps: int | None,
-    gemm_cls_name: str,
-):
-    GemmCls = _REGISTRY[gemm_cls_name]
+    GemmCls: type,
+    epi_keys: tuple,
+) -> Callable:
     mA, mB, mD, mC, m, n, k, l = make_fake_gemm_tensors(
         a_dtype,
         b_dtype,
@@ -124,10 +123,16 @@ def _compile_gemm(
         gather_A=gather_A,
     )
 
-    epi_args = GemmCls.EpilogueArguments(
+    epi_args = _epi_compile_args(
+        GemmCls=GemmCls,
+        epi_keys=epi_keys,
         add_to_output=add_to_output,
         rounding_mode=rounding_mode,
         sr_seed=None,
+        m=m,
+        n=n,
+        k=k,
+        l=l,
     )
     scheduler_args = make_fake_scheduler_args(
         has_semaphore=(is_dynamic_persistent and device_capacity[0] <= 9),
@@ -190,6 +195,8 @@ def _gemm_epilogue(
     max_swizzle_size: int,
     batch_idx_permute: torch.Tensor | None,
     add_to_output: bool,
+    epi_args: dict,
+    epi_keys: tuple,
 ) -> None:
 
     device_capacity = get_device_capacity(A.device)
@@ -237,7 +244,8 @@ def _gemm_epilogue(
         rounding_mode=RoundingMode.RN,
         sr_seed_mode=None,
         num_warps=None,
-        gemm_cls_name=GemmCls.__name__,
+        GemmCls=GemmCls,
+        epi_keys=epi_keys,
     )
 
     cluster_size = cluster_M * cluster_N * cluster_K
@@ -249,7 +257,9 @@ def _gemm_epilogue(
         if persistent else 0
     )
 
-    epi_args = GemmCls.EpilogueArguments(
+    processed_epi_args = _process_epi_args(
+        GemmCls=GemmCls,
+        epi_args=epi_args,
         add_to_output=None,
         rounding_mode=None,
         sr_seed=None,
@@ -267,15 +277,32 @@ def _gemm_epilogue(
     )
 
     if device_capacity[0] in [10, 11]:
-        compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args, None, None)
+        compiled_fn(A, B, D, C, processed_epi_args, scheduler_args, varlen_args, None, None)
     else:
-        compiled_fn(A, B, D, C, epi_args, scheduler_args, varlen_args)
+        compiled_fn(A, B, D, C, processed_epi_args, scheduler_args, varlen_args)
+
+
+def prune_gemm_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs) -> list[AutotuneConfig]:
+    kwargs = named_args | kwargs
+    pin_tile_M = kwargs.get("pin_tile_M", None)
+    pin_tile_N = kwargs.get("pin_tile_N", None)
+    configs = prune_invalid_gemm_configs(
+        configs=configs,
+        named_args=named_args,
+        **kwargs,
+    )
+    configs = [conf for conf in configs if not conf.kwargs["config"].swap_ab]
+    if pin_tile_M is not None:
+        configs = [conf for conf in configs if conf.kwargs["config"].tile_m == pin_tile_M]
+    if pin_tile_N is not None:
+        configs = [conf for conf in configs if conf.kwargs["config"].tile_n == pin_tile_N]
+    return configs
 
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in get_all_configs()],
-    key=["GemmCls", "add_to_output"],
-    prune_configs_by={"early_config_prune": prune_invalid_gemm_configs},
+    key=["GemmCls", "epi_keys", "pin_tile_M", "pin_tile_N", "add_to_output"],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
 )
 def _gemm_epilogue_tuned(
     GemmCls: type,
@@ -283,6 +310,10 @@ def _gemm_epilogue_tuned(
     B: torch.Tensor,
     D: torch.Tensor,
     C: torch.Tensor | None,
+    epi_args: dict,
+    epi_keys: tuple,
+    pin_tile_M: int | None,
+    pin_tile_N: int | None,
     batch_idx_permute: torch.Tensor | None,
     add_to_output: bool,
     config: GemmConfig | None,
@@ -296,12 +327,15 @@ def _gemm_epilogue_tuned(
         else None
     )
 
+    if config.swap_ab:
+        raise NotImplementedError
+
     _gemm_epilogue(
         GemmCls=GemmCls,
-        A=A if not config.swap_ab else B,
-        B=B if not config.swap_ab else A,
-        D=(D if not config.swap_ab else D.mT) if D is not None else None,
-        C=(C if not config.swap_ab else C.mT) if C is not None else None,
+        A=A,
+        B=B,
+        D=D,
+        C=C,
         tile_count_semaphore=tile_count_semaphore,
         tile_M=config.tile_m,
         tile_N=config.tile_n,
@@ -315,6 +349,8 @@ def _gemm_epilogue_tuned(
         max_swizzle_size=config.max_swizzle_size,
         batch_idx_permute=batch_idx_permute,
         add_to_output=add_to_output,
+        epi_args=epi_args,
+        epi_keys=epi_keys,
     )
 
 
@@ -349,6 +385,11 @@ def _dispatch(
     B: torch.Tensor,
     D: torch.Tensor | None,
     C: torch.Tensor | None = None,
+    *,
+    epi_args: dict,
+    epi_keys: tuple,
+    pin_tile_M: int | None = None,
+    pin_tile_N: int | None = None,
     batch_idx_permute: torch.Tensor | None = None,
     add_to_output: bool = False,
     tuned: bool = True,
@@ -370,6 +411,10 @@ def _dispatch(
             B=B,
             D=D,
             C=C,
+            epi_args=epi_args,
+            epi_keys=epi_keys,
+            pin_tile_M=pin_tile_M,
+            pin_tile_N=pin_tile_N,
             batch_idx_permute=batch_idx_permute,
             add_to_output=add_to_output,
         )
@@ -380,6 +425,10 @@ def _dispatch(
             B=B,
             D=D,
             C=C,
+            epi_args=epi_args,
+            epi_keys=epi_keys,
+            pin_tile_M=pin_tile_M,
+            pin_tile_N=pin_tile_N,
             batch_idx_permute=batch_idx_permute,
             add_to_output=add_to_output,
             config=None,
