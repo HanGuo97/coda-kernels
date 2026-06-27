@@ -33,6 +33,8 @@ from quack.gemm_tvm_ffi_utils import (
     make_scheduler_args,
     make_varlen_args,
 )
+from coda.core.ops.torch_utils import preprocess_tensor
+from coda.core.epilogue.utils import compile_epi_args, process_epi_args
 
 # Disable quack's @autotune parallel-subprocess precompile
 # since it pickles the call args to workers
@@ -88,7 +90,7 @@ def _compile_gemm(
         gather_A=gather_A,
     )
 
-    epi_args = _epi_compile_args(
+    epi_args = compile_epi_args(
         GemmCls=GemmCls,
         epi_keys=epi_keys,
         add_to_output=add_to_output,
@@ -222,7 +224,7 @@ def _gemm_epilogue(
         if persistent else 0
     )
 
-    processed_epi_args = _process_epi_args(
+    processed_epi_args = process_epi_args(
         GemmCls=GemmCls,
         epi_args=epi_args,
         add_to_output=None,
