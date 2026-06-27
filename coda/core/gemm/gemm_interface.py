@@ -1,9 +1,11 @@
+import os
 import torch
 import functools
 import cutlass
 import cutlass.cute as cute
 from typing import Callable
 
+import quack.cache
 from quack.cache import jit_cache
 from quack.rounding import RoundingMode
 from quack.gemm_interface import (
@@ -31,6 +33,13 @@ from quack.gemm_tvm_ffi_utils import (
     make_scheduler_args,
     make_varlen_args,
 )
+
+# Disable quack's @autotune parallel-subprocess precompile
+# since it pickles the call args to workers
+os.environ.setdefault("QUACK_COMPILE_WORKERS", "1")
+
+# Disable quack's persistent cache
+quack.cache.CACHE_ENABLED = False
 
 
 def preprocess_vector(
@@ -109,6 +118,9 @@ def _compile_gemm(
     GemmCls: type,
     epi_keys: tuple,
 ) -> Callable:
+    assert use_tma_gather is False
+    assert sr_seed_mode is None
+    assert num_warps is None
     mA, mB, mD, mC, m, n, k, l = make_fake_gemm_tensors(
         a_dtype,
         b_dtype,
@@ -394,7 +406,6 @@ def _dispatch(
     add_to_output: bool = False,
     tuned: bool = True,
 ) -> None:
-
     # Preprocess A: (M, K) -> (M, K, L) with permute
     A = preprocess_tensor(A, permute=True, transpose=False)
     # Preprocess B: (K, N) -> (N, K, L) with transpose + permute
