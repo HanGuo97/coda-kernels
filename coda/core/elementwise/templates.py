@@ -71,9 +71,15 @@ def elementwise_apply_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     ).dst_thread
+    tZrZ = creation_utils.allocate_tensor_like(
+        tensor=tXrX,
+        memspace="rmem",
+        smem_allocator=allocator,
+        dtype=mZ.element_type,
+    )
 
     # apply custom function
-    tZrZ = fn(tXrX, tYrY)
+    fn(tXrX, tYrY, tZrZ)
 
     # Copy the results back
     _ = memory_utils.copy(
