@@ -1,11 +1,7 @@
 import torch
-from coda.core.gemm.gemm_interface import (
-    _dispatch,
-    _kernel_op,
-    make_epi_keys,
-    preprocess_epi_args,
-)
+from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
 from coda.core.gemm.registry import GemmSwiGLU
+from coda.core.gemm.gemm_interface import _dispatch, _kernel_op
 
 
 @_kernel_op("coda::gemm_swiglu", mutates_args=("pre_act", "post_act"))
@@ -22,7 +18,7 @@ def _gemm_swiglu(
         B=B,
         D=pre_act,
         epi_args=epi_args,
-        epi_keys=make_epi_keys(epi_args),
+        epi_keys=make_epi_keys(GemmSwiGLU, epi_args),
     )
 
 
@@ -33,10 +29,5 @@ def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.T
     pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
     post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
     epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
-    _gemm_swiglu(
-        A=A,
-        B=B,
-        pre_act=pre_act,
-        post_act=epi_args["mAuxOut"],
-    )
+    _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
     return pre_act, post_act
