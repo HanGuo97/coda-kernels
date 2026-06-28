@@ -79,7 +79,7 @@ def make_epi_keys(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> tuple[Ep
     return tuple(epi_keys)
 
 
-def preprocess_epi(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> dict:
+def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> dict:
     epi_op_by_name = {
         op.name: op
         for op in GemmCls._epi_ops
