@@ -146,6 +146,9 @@ def _make_fake_epi_arg(
     if isinstance(op, TileStore):
         leading_dim = 1 if major == "n" else 0
         if op.epi_tile_fn is not None:
+            # if `epi_tile_fn` is present, we cannot determine auxiliary tensor shape
+            # since `SymInt` does not support arbitrary algebra, we so far assume that
+            # `epi_tile_fn` will only change `n`, not `m`
             _n = cute.sym_int()
         else:
             _n = n
@@ -164,10 +167,10 @@ def compile_epi_args(
     add_to_output: bool,
     rounding_mode: RoundingMode,
     sr_seed: int | None,
-    m: int,
-    n: int,
-    k: int,
-    l: int,
+    m: cute.SymInt,
+    n: cute.SymInt,
+    k: cute.SymInt,
+    l: cute.SymInt,
 ) -> tuple:
     epi_op_by_name = {
         op.name: op
