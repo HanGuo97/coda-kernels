@@ -6,7 +6,7 @@ from quack.activation import dswiglu
 
 from coda.core.ops.misc_utils import static_assert
 from coda.core.gemm.gemm_interface import _kernel_op
-from coda.core.elementwise.templates import elementwise_apply_tuned
+from coda.core.elementwise.templates import _elementwise_op_tuned
 
 
 @cute.jit
@@ -28,7 +28,7 @@ def _dswiglu_op(tX: cute.Tensor, tY: cute.Tensor, tZ: cute.Tensor) -> None:
 
 @_kernel_op("coda::_dswiglu_backward", mutates_args=("Z",))
 def _dswiglu_backward(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor) -> None:
-    return elementwise_apply_tuned(op=_dswiglu_op, X=X, Y=Y, Z=Z)
+    return _elementwise_op_tuned(op=_dswiglu_op, X=X, Y=Y, Z=Z)
 
 
 def dswiglu_backward(pre_act: torch.Tensor, grad_out: torch.Tensor) -> torch.Tensor:
