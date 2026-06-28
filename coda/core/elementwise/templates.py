@@ -91,3 +91,50 @@ def elementwise_apply_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     )
+
+
+@cute.jit
+def elementwise_apply(
+    fn: cutlass.Constexpr[Callable],
+    mX: cute.Tensor,
+    mY: cute.Tensor,
+    mZ: cute.Tensor,
+    stream: cuda.CUstream,
+) -> None:
+    vector_size = cutlass.const_expr(
+        128 //
+        cutlass.max(
+            mX.element_type.width,
+            mY.element_type.width,
+            mZ.element_type.width,
+        )
+    )
+    tiler_mn, tv_layout = layout_utils.make_2D_elementwise_layout(
+        dtype=mX.element_type,
+        num_bits_per_copy=(
+            vector_size *
+            mX.element_type.width
+        ),
+    )
+
+    # ((TileM, TileN), (RestM, RestN))
+    gX = cute.zipped_divide(mX, tiler_mn)
+    num_blocks = gX.shape[1]
+    num_threads = cute.size(tv_layout, mode=[0])
+    static_assert(len(num_blocks) == 2)
+    kernel = elementwise_apply_kernel(
+        fn,
+        mX,
+        mY,
+        mZ,
+        tiler_mn,
+        tv_layout,
+        vector_size,
+    )
+    kernel.launch(
+        grid=[*num_blocks, 1],
+        block=[num_threads, 1, 1],
+        cluster=None,
+        smem=None,
+        stream=stream,
+    )
