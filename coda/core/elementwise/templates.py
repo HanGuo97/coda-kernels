@@ -10,7 +10,6 @@ from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
 from coda.core.ops.misc_utils import static_assert
-from coda.core.ops.launch_utils import launch_check
 
 
 @cute.kernel
@@ -101,8 +100,11 @@ def elementwise_apply(
     mX: cute.Tensor,
     mY: cute.Tensor,
     mZ: cute.Tensor,
+    thr_m: cutlass.Constexpr[int],
+    thr_n: cutlass.Constexpr[int],
+    val_m: cutlass.Constexpr[int],
     stream: cuda.CUstream,
-) -> None:
+) -> int:
     vector_size = cutlass.const_expr(
         128 //
         cutlass.max(
@@ -111,13 +113,9 @@ def elementwise_apply(
             mZ.element_type.width,
         )
     )
-    tiler_mn, tv_layout = layout_utils.make_2D_elementwise_layout(
-        dtype=mX.element_type,
-        num_bits_per_copy=(
-            vector_size *
-            mX.element_type.width
-        ),
-    )
+    thr_layout = layout_utils.make_ordered_layout((thr_m, thr_n), order="row")
+    val_layout = layout_utils.make_ordered_layout((val_m, vector_size), order="row")
+    tiler_mn, tv_layout = cute.make_layout_tv(thr_layout, val_layout)
 
     # ((TileM, TileN), (RestM, RestN))
     gX = cute.zipped_divide(mX, tiler_mn)
@@ -140,3 +138,4 @@ def elementwise_apply(
         smem=None,
         stream=stream,
     )
+    return kernel.smem_usage()
