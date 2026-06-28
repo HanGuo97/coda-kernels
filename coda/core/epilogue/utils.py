@@ -62,6 +62,10 @@ def make_epi_keys(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> tuple[Ep
         op.name: op
         for op in GemmCls._epi_ops
     }
+    epi_const_names = {
+        name
+        for name, _, _ in GemmCls._extra_param_fields
+    }
     epi_keys = []
     for name, arg in epi_args.items():
         if isinstance(arg, torch.Tensor):
@@ -70,6 +74,7 @@ def make_epi_keys(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> tuple[Ep
                 tensor=arg,
             )
         else:
+            assert name in epi_const_names
             epi_key = EpilogueKeyConst(
                 name=name,
                 dtype=type(arg),
@@ -217,7 +222,8 @@ def process_epi_args(
     EpiArgCls = GemmCls.EpilogueArguments
     epi_args_processed = {}
     for name in EpiArgCls._fields:
-        epi_arg = epi_args[name]
+        # certain fields (`rounding_mode`, etc) aren't in `epi_args`
+        epi_arg = epi_args.get(name, None)
         if isinstance(epi_arg, torch.Tensor):
             epi_args_processed[name] = epi_arg
         else:
