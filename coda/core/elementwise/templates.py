@@ -1,0 +1,87 @@
+import torch
+import warnings
+import cutlass
+import cutlass.cute as cute
+import cutlass.torch as cutlass_torch
+import cuda.bindings.driver as cuda
+from typing import Callable
+
+from coda.core.ops import layout_utils
+from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
+from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.launch_utils import launch_check
+
+
+@cute.kernel
+def elementwise_apply_kernel(
+    fn: cutlass.Constexpr[Callable],
+    mX: cute.Tensor,
+    mY: cute.Tensor,
+    mZ: cute.Tensor,
+    tiler_mn: cute.Shape,
+    tv_layout: cute.Layout,
+    vector_size: cutlass.Constexpr[int],
+) -> None:
+    tidx, _, _ = cute.arch.thread_idx()
+    bidx, bidy, _ = cute.arch.block_idx()
+    allocator = cutlass.utils.SmemAllocator()
+
+    idX = cute.make_identity_tensor(mX.shape)
+    gX = cute.local_tile(mX, tiler_mn, (bidx, bidy))
+    gY = cute.local_tile(mY, tiler_mn, (bidx, bidy))
+    gZ = cute.local_tile(mZ, tiler_mn, (bidx, bidy))
+    cX = cute.local_tile(idX, tiler_mn, (bidx, bidy))
+    config_X = memory_utils.MemoryCopyConfig(
+        op="universal",
+        dtype=mX.element_type,
+        num_bits_per_copy=mX.element_type.width * vector_size,
+        tiler_mn=tiler_mn,
+        layout_tv=tv_layout,
+    )
+    config_Y = memory_utils.MemoryCopyConfig(
+        op="universal",
+        dtype=mY.element_type,
+        num_bits_per_copy=mY.element_type.width * vector_size,
+        tiler_mn=tiler_mn,
+        layout_tv=tv_layout,
+    )
+    config_Z = memory_utils.MemoryCopyConfig(
+        op="universal",
+        dtype=mZ.element_type,
+        num_bits_per_copy=mZ.element_type.width * vector_size,
+        tiler_mn=tiler_mn,
+        layout_tv=tv_layout,
+    )
+    tXrX = memory_utils.copy(
+        src=gX,
+        dst="rmem",
+        crd=cX,
+        shape=mX.shape,
+        config=config_X,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    ).dst_thread
+    tYrY = memory_utils.copy(
+        src=gY,
+        dst="rmem",
+        crd=cX,
+        shape=mY.shape,
+        config=config_Y,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    ).dst_thread
+
+    # apply custom function
+    tZrZ = fn(tXrX, tYrY)
+
+    # Copy the results back
+    _ = memory_utils.copy(
+        src=tZrZ,
+        dst=gZ,
+        crd=cX,
+        shape=mZ.shape,
+        config=config_Z,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    )
