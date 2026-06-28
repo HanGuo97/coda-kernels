@@ -1,15 +1,21 @@
 import torch
-import warnings
 import cutlass
 import cutlass.cute as cute
-import cutlass.torch as cutlass_torch
 import cuda.bindings.driver as cuda
 from typing import Callable
+
+from quack.cache import jit_cache
+from quack.cute_dsl_utils import torch2cute_dtype_map
+from quack.autotuner import (
+    autotune,
+    AutotuneConfig,
+)
 
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
 from coda.core.ops.misc_utils import static_assert
+from coda.core.gemm.gemm_interface import _kernel_op
 
 
 @cute.kernel
@@ -139,3 +145,107 @@ def elementwise_apply(
         stream=stream,
     )
     return kernel.smem_usage()
+
+
+@jit_cache
+def _compile_elementwise(
+    op: Callable,
+    size: int,
+    x_dtype: type[cute.Numeric],
+    y_dtype: type[cute.Numeric],
+    z_dtype: type[cute.Numeric],
+    thr_m: int,
+    thr_n: int,
+    val_m: int,
+) -> Callable:
+    m = cute.sym_int()
+    mX = cute.runtime.make_fake_tensor(dtype=x_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
+    mY = cute.runtime.make_fake_tensor(dtype=y_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
+    mZ = cute.runtime.make_fake_tensor(dtype=z_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
+    stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
+    return cute.compile(
+        elementwise_apply,
+        op,
+        mX,
+        mY,
+        mZ,
+        thr_m,
+        thr_n,
+        val_m,
+        stream,
+        options="--enable-tvm-ffi",
+    )
+
+
+def _elementwise_op(
+    op: Callable,
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    Z: torch.Tensor,
+    thr_m: int,
+    thr_n: int,
+    val_m: int,
+) -> None:
+    assert X.ndim == 2
+    assert X.shape == Y.shape == Z.shape
+    size = X.shape[1]
+    compiled_fn = _compile_elementwise(
+        op=op,
+        size=size,
+        x_dtype=torch2cute_dtype_map[X.dtype],
+        y_dtype=torch2cute_dtype_map[Y.dtype],
+        z_dtype=torch2cute_dtype_map[Z.dtype],
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+    )
+    compiled_fn(
+        None,
+        X,
+        Y,
+        Z,
+        None,
+        None,
+        None,
+    )
+
+
+@autotune(
+    configs=[
+        # 128 threads/block
+        AutotuneConfig(thr_m=4, thr_n=32, val_m=4),
+        AutotuneConfig(thr_m=4, thr_n=32, val_m=2),
+        AutotuneConfig(thr_m=2, thr_n=64, val_m=2),
+        # 256 threads/block
+        AutotuneConfig(thr_m=8, thr_n=32, val_m=2),
+        AutotuneConfig(thr_m=4, thr_n=64, val_m=2),
+        AutotuneConfig(thr_m=8, thr_n=32, val_m=4),
+        # 512 threads/block
+        AutotuneConfig(thr_m=8, thr_n=64, val_m=2),
+        AutotuneConfig(thr_m=4, thr_n=128, val_m=2),
+        AutotuneConfig(thr_m=16, thr_n=32, val_m=2),
+        # 1024 threads/block
+        AutotuneConfig(thr_m=8, thr_n=128, val_m=1),
+        AutotuneConfig(thr_m=8, thr_n=128, val_m=2),
+    ],
+    key=["op"],
+    cache_results=False,
+)
+def _elementwise_op_tuned(
+    op: Callable,
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    Z: torch.Tensor,
+    thr_m: int,
+    thr_n: int,
+    val_m: int,
+) -> None:
+    _elementwise_op(
+        op=op,
+        X=X,
+        Y=Y,
+        Z=Z,
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+    )

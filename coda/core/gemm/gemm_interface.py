@@ -270,6 +270,7 @@ def prune_gemm_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs
     configs=[AutotuneConfig(config=c) for c in get_all_configs()],
     key=["GemmCls", "epi_keys", "pin_tile_M", "pin_tile_N", "add_to_output"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
 )
 def _gemm_epilogue_tuned(
     GemmCls: type,
