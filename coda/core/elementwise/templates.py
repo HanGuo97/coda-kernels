@@ -53,7 +53,7 @@ def elementwise_apply_kernel(
         tiler_mn=tiler_mn,
         layout_tv=tv_layout,
     )
-    tXrX = memory_utils.copy(
+    copy_outputs_X = memory_utils.copy(
         src=gX,
         dst="rmem",
         crd=cX,
@@ -61,8 +61,8 @@ def elementwise_apply_kernel(
         config=config_X,
         thread_index=tidx,
         smem_allocator=allocator,
-    ).dst_thread
-    tYrY = memory_utils.copy(
+    )
+    copy_outputs_Y = memory_utils.copy(
         src=gY,
         dst="rmem",
         crd=cX,
@@ -70,7 +70,9 @@ def elementwise_apply_kernel(
         config=config_Y,
         thread_index=tidx,
         smem_allocator=allocator,
-    ).dst_thread
+    )
+    tXrX = copy_outputs_X.dst_thread
+    tYrY = copy_outputs_Y.dst_thread
     tZrZ = creation_utils.allocate_tensor_like(
         tensor=tXrX,
         memspace="rmem",
@@ -85,7 +87,7 @@ def elementwise_apply_kernel(
     _ = memory_utils.copy(
         src=tZrZ,
         dst=gZ,
-        crd=cX,
+        crd=copy_outputs_X.crd_thread,
         shape=mZ.shape,
         config=config_Z,
         thread_index=tidx,
