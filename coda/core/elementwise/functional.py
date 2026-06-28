@@ -5,6 +5,7 @@ import cutlass.cute as cute
 from quack.activation import dswiglu
 
 from coda.core.ops.misc_utils import static_assert
+from coda.core.gemm.gemm_interface import _kernel_op
 from coda.core.elementwise.templates import elementwise_apply_tuned
 
 
@@ -25,14 +26,18 @@ def _dswiglu_op(tX: cute.Tensor, tY: cute.Tensor, tZ: cute.Tensor) -> None:
         tZ_pair[2 * i + 1] = du.to(dtype=dtype)
 
 
+@_kernel_op("coda::_dswiglu_backward", mutates_args=("Z",))
+def _dswiglu_backward(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor) -> None:
+    return elementwise_apply_tuned(op=_dswiglu_op, X=X, Y=Y, Z=Z)
+
+
 def dswiglu_backward(pre_act: torch.Tensor, grad_out: torch.Tensor) -> torch.Tensor:
     assert pre_act.dtype in (torch.bfloat16, torch.float16)
     assert grad_out.dtype == pre_act.dtype
     assert pre_act.is_contiguous()
     assert grad_out.is_contiguous()
     grad_pre = torch.empty_like(pre_act)
-    elementwise_apply_tuned(
-        op=_dswiglu_op,
+    _dswiglu_backward(
         X=pre_act.view(dtype=torch.int32),
         Y=grad_out,
         Z=grad_pre.view(dtype=torch.int32),
