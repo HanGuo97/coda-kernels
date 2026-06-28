@@ -1,7 +1,7 @@
 import torch
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
-from coda.core.gemm.registry import GemmSwiGLU
 from coda.core.gemm.gemm_interface import _dispatch, _kernel_op
+from coda.core.gemm.registry import GemmSwiGLU
 
 
 @_kernel_op("coda::gemm_swiglu", mutates_args=("pre_act", "post_act"))
