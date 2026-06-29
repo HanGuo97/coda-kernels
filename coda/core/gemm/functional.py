@@ -1,7 +1,37 @@
 import torch
+from quack.gemm_interface import gemm as quack_gemm
+from quack.autotuner import autotune, AutotuneConfig
+
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
 from coda.core.gemm.gemm_interface import _dispatch, _kernel_op
 from coda.core.gemm.registry import GemmSwiGLU
+
+
+@autotune(
+    configs=[
+        AutotuneConfig(backend="quack"),
+        AutotuneConfig(backend="cublas"),
+    ],
+    cache_results=False,
+)
+def _gemm_tuned(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, backend: str) -> None:
+    if backend == "quack":
+        quack_gemm(A=A, B=B, out=out, tuned=True)
+    else:
+        torch.matmul(A, B, out=out)
+
+
+@_kernel_op("coda::gemm", mutates_args=("out",))
+def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor) -> None:
+    _gemm_tuned(A=A, B=B, out=out)
+
+
+def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    M, _ = A.shape
+    _, N = B.shape
+    out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    _gemm(A=A, B=B, out=out)
+    return out
 
 
 @_kernel_op("coda::gemm_swiglu", mutates_args=("pre_act", "post_act"))
