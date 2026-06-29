@@ -5,17 +5,13 @@ import cuda.bindings.driver as cuda
 from typing import Callable
 
 from quack.cache import jit_cache
+from quack.autotuner import autotune, AutotuneConfig
 from quack.cute_dsl_utils import torch2cute_dtype_map
-from quack.autotuner import (
-    autotune,
-    AutotuneConfig,
-)
 
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
 from coda.core.ops.misc_utils import static_assert
-from coda.core.gemm.gemm_interface import _kernel_op
 
 
 @cute.kernel
@@ -119,6 +115,14 @@ def elementwise_apply(
             mZ.element_type.width,
         )
     )
+    static_assert(len(mX.shape) == 2)
+    static_assert(len(mY.shape) == 2)
+    static_assert(len(mZ.shape) == 2)
+    static_assert(len(mX.shape) == len(mY.shape))
+    static_assert(len(mX.shape) == len(mZ.shape))
+    static_assert(mX.shape[1] == mY.shape[1])
+    static_assert(mX.shape[1] == mZ.shape[1])
+    static_assert(mX.shape[1] % vector_size == 0)
     thr_layout = layout_utils.make_ordered_layout((thr_m, thr_n), order="row")
     val_layout = layout_utils.make_ordered_layout((val_m, vector_size), order="row")
     tiler_mn, tv_layout = cute.make_layout_tv(thr_layout, val_layout)
@@ -186,7 +190,6 @@ def _elementwise_op(
     thr_n: int,
     val_m: int,
 ) -> None:
-    assert X.ndim == 2
     assert X.shape == Y.shape == Z.shape
     size = X.shape[1]
     compiled_fn = _compile_elementwise(
@@ -199,15 +202,7 @@ def _elementwise_op(
         thr_n=thr_n,
         val_m=val_m,
     )
-    compiled_fn(
-        None,
-        X,
-        Y,
-        Z,
-        None,
-        None,
-        None,
-    )
+    compiled_fn(mX=X, mY=Y, mZ=Z)
 
 
 @autotune(
