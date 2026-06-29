@@ -4,7 +4,7 @@ from coda.core.elementwise.functional import dswiglu_backward
 from coda.core.gemm.functional import gemm, gemm_swiglu
 
 
-class SwiGLU(torch.autograd.Function):
+class LinearSwiGLU(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -21,5 +21,5 @@ class SwiGLU(torch.autograd.Function):
         return dx, dweight
 
 
-def swiglu(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    return SwiGLU.apply(x, weight)
+def linear_swiglu(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    return LinearSwiGLU.apply(x, weight)
