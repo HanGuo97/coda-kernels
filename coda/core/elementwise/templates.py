@@ -118,8 +118,6 @@ def elementwise_apply(
     static_assert(len(mX.shape) == 2)
     static_assert(len(mY.shape) == 2)
     static_assert(len(mZ.shape) == 2)
-    static_assert(len(mX.shape) == len(mY.shape))
-    static_assert(len(mX.shape) == len(mZ.shape))
     static_assert(mX.shape[1] == mY.shape[1])
     static_assert(mX.shape[1] == mZ.shape[1])
     static_assert(mX.shape[1] % vector_size == 0)
