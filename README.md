@@ -38,5 +38,4 @@ Fused linear projection and SwiGLU activation: `swiglu(x @ weight.T)`, where the
 |----------|-------|-------------|
 | `x` | `(M, K)` | Input activations. |
 | `weight` | `(N, K)` | Gate+up projection weight (`out_features, in_features`); `N` must be even. |
-
-**Returns** `(M, N // 2)` — the SwiGLU output. Differentiable in both `x` and `weight`.
+| **Returns** | `(M, N // 2)` | SwiGLU output; differentiable in both `x` and `weight`. |
