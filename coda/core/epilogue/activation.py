@@ -19,9 +19,6 @@ class Act(Epilogue):
     def declares(self) -> tuple[EpiOp, ...]:
         return (TileStore("mAuxOut"),)
 
-    def cache_key(self) -> tuple:
-        return ("Act", self.fn)
-
     def auxiliary_mixin(self) -> type | None:
         return GemmActMixin
 
@@ -51,9 +48,6 @@ class Pairwise(Epilogue):
     def declares(self) -> tuple[EpiOp, ...]:
         return (TileStore("mAuxOut"),)
 
-    def cache_key(self) -> tuple:
-        return ("Pairwise", self.fn)
-
     def auxiliary_mixin(self) -> type | None:
         return GemmActMixin
 
@@ -82,9 +76,6 @@ class Gated(Epilogue):
 
     def declares(self) -> tuple[EpiOp, ...]:
         return (TileStore("mAuxOut", epi_tile_fn=_gated_epi_tile_fn),)
-
-    def cache_key(self) -> tuple:
-        return ("Gated", self.fn)
 
     def auxiliary_mixin(self) -> type | None:
         return GemmGatedMixin

@@ -39,9 +39,6 @@ class Epilogue(object):
     ) -> tuple[cute.Tensor, ...]:
         return ()
 
-    def cache_key(self) -> tuple:
-        return (type(self).__name__,)
-
     def auxiliary_mixin(self) -> type | None:
         return None
 
@@ -59,9 +56,6 @@ class _Composite(Epilogue):
 
     def declare_constexprs(self) -> tuple[Const, ...]:
         return tuple(c for child in self._children for c in child.declare_constexprs())
-
-    def cache_key(self) -> tuple:
-        return tuple(child.cache_key() for child in self._children)
 
     def auxiliary_mixin(self) -> type | None:
         mixins = []
