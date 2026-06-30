@@ -162,7 +162,15 @@ def _make_args(fields: list[FieldSpec]) -> type:
     return mlir_namedtuple(cls)
 
 
+_BOUND_NAMES: set[str] = set()
+
+
 def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
+    if name in _BOUND_NAMES:
+        raise ValueError(f"epilogue name {name!r} is already bound; bind names must be unique (cache key)")
+    else:
+        _BOUND_NAMES.add(name)
+
     ops = _normalize(epilogue.declares())
     aux_ops = [op for op in ops if isinstance(op, TileStore)]
     if len(aux_ops) == 1:
