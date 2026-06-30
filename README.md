@@ -37,26 +37,13 @@ pip install -e .
 
 `coda/kernels/functional/` exposes the fused kernels as differentiable `torch.autograd.Function`s with hand-written backward passes.
 
-#### `linear_swiglu(x, weight)`
+#### `linear_swiglu`
 
-Fused linear projection followed by a SwiGLU activation. Computes `swiglu(x @ weight.T)`: the projection yields a `gate||up` pre-activation, which SwiGLU collapses to half the width.
+Fused linear projection and SwiGLU activation: `swiglu(x @ weight.T)`, where the projection produces a `gate || up` pre-activation and `swiglu(gate || up) = silu(gate) * up`.
 
 | Argument | Shape | Description |
 |----------|-------|-------------|
 | `x` | `(M, K)` | Input activations. |
-| `weight` | `(N, K)` | Gate+up projection weight (`out_features, in_features`). `N` must be even. |
+| `weight` | `(N, K)` | Gate+up projection weight (`out_features, in_features`); `N` must be even. |
 
-**Returns:** a `(M, N // 2)` tensor.
-
-**Backward:** the forward saves `x`, `weight`, and the `gate||up` pre-activation. Given the output gradient, the SwiGLU derivative recovers the pre-activation gradient `grad_pre` of shape `(M, N)`, then two GEMMs produce `dx = grad_pre @ weight` and `dweight = grad_pre.T @ x`. Saving the pre-activation rather than the activation lets SwiGLU be recomputed locally instead of stored.
-
-```python
-import torch
-from coda.kernels.functional.swiglu import linear_swiglu
-
-x      = torch.randn(4096, 4096, dtype=torch.bfloat16, device="cuda", requires_grad=True)
-weight = torch.randn(8192, 4096, dtype=torch.bfloat16, device="cuda", requires_grad=True)
-
-out = linear_swiglu(x, weight)   # (4096, 4096)
-out.sum().backward()             # populates x.grad and weight.grad
-```
+**Returns** `(M, N // 2)` — the SwiGLU output. Differentiable in both `x` and `weight`.
