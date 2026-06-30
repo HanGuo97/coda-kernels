@@ -27,17 +27,10 @@ pip install -e .
 ```
 
 
-## Quick Start
-
-> [!NOTE]
-> We autotune each kernel the first time it sees a new input configuration (shape, dtype, etc.), so the initial call may take a while.
+## Functional level
 
 
-### Functional level
-
-`coda/kernels/functional/` exposes the fused kernels as differentiable `torch.autograd.Function`s with hand-written backward passes.
-
-#### `linear_swiglu`
+### `linear_swiglu`
 
 Fused linear projection and SwiGLU activation: `swiglu(x @ weight.T)`, where the projection produces a `gate || up` pre-activation and `swiglu(gate || up) = silu(gate) * up`.
 
