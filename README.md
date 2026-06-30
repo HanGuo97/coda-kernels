@@ -30,7 +30,7 @@ pip install -e .
 ## Functional level
 
 
-### `coda.kernels.functional.linear_swiglu`
+### `coda.kernels.functional.swiglu.linear_swiglu`
 
 Fused linear projection and SwiGLU activation: `swiglu(x @ weight.T)`, where the projection produces a `gate || up` pre-activation and `swiglu(gate || up) = silu(gate) * up`.
 
