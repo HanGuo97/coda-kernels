@@ -2,10 +2,11 @@ import math
 import cutlass
 import cutlass.cute as cute
 
-from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext
-from quack.cute_dsl_utils import ParamsBase
-from quack.gemm_sm90 import GemmSm90
 from quack import layout_utils
+from quack.gemm_sm90 import GemmSm90
+from quack.cute_dsl_utils import ParamsBase
+from quack.varlen_utils import VarlenManager
+from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext
 
 from coda.core.ops import misc_utils
 from coda.core.ops import reduction_utils
@@ -24,7 +25,7 @@ class LSEReduce(VecReduce):
         tDrMax = cute.make_rmem_tensor(layout, cute.Float32)
         tDrSSE = cute.make_rmem_tensor(layout, cute.Float32)
         tRS_cD = ctx.partition_for_epilogue_fn(cute.make_identity_tensor(gemm.cta_tile_shape_mnk[:2]))
-        return (tDrMax, tDrSSE, tRS_cD, ctx.tile_coord_mnkl)
+        return tDrMax, tDrSSE, tRS_cD, ctx.tile_coord_mnkl
 
     @cute.jit
     def begin_loop(self, gemm: GemmSm90, state: tuple, epi_coord: cute.Coord) -> tuple:
@@ -57,44 +58,42 @@ class LSEReduce(VecReduce):
             tile_M, tile_N = gemm.cta_tile_shape_mnk[:2]
 
             tDrMax, tDrSSE, tDcD, _ = state
-            tDrMax_cur = tDrMax[None, None, None, epi_coord[0], epi_coord[1]]
-            tDrSSE_cur = tDrSSE[None, None, None, epi_coord[0], epi_coord[1]]
+            rMax_cur = tDrMax[None, None, None, epi_coord[0], epi_coord[1]]
+            rSSE_cur = tDrSSE[None, None, None, epi_coord[0], epi_coord[1]]
             tDcD_cur = tDcD[None, None, None, epi_coord[0], epi_coord[1]]
             tiled_copy = tiled_copy_t2r if tiled_copy_t2r is not None else tiled_copy_r2s
             reference_src = tiled_copy_t2r is None
 
             # ── Derive lane layout from tiled_copy ──
             lane_layout_MN, warp_layout_MN = _get_lane_warp_layouts(tiled_copy, reference_src)
-            lanes_in_N = cute.size(lane_layout_MN, mode=[1])
+            lanes_in_N = cutlass.const_expr(cute.size(lane_layout_MN, mode=[1]))
+            warps_in_N = cutlass.const_expr(cute.size(warp_layout_MN, mode=[1]))
             is_lane_n_leader = cute.arch.lane_idx() % lanes_in_N == 0
             # Typically lanes_in_N is 4 for Sm90
             misc_utils.static_assert(
                 lanes_in_N == 1 << int(math.log2(lanes_in_N)),
                 "lanes_in_N must be a power of 2 for butterfly reduction",
             )
+            misc_utils.static_assert(warps_in_N == 1)
 
             # Intra-warp shuffle reduction across N lanes
             if cutlass.const_expr(lanes_in_N > 1):
+                rMax_flt = cute.filter_zeros(rMax_cur)
+                rSSE_flt = cute.filter_zeros(rSSE_cur)
                 # Assumes threads for each M row are contiguous along N, so
                 # warp_reduction over groups of lanes_in_N matches lane_layout_MN.
                 misc_utils.static_assert(lane_layout_MN.stride[1] == 1)
-                tDrMax_flt = cute.filter_zeros(tDrMax_cur)
-                tDrSSE_flt = cute.filter_zeros(tDrSSE_cur)
-                misc_utils.static_assert(cute.size(tDrMax_flt) == cute.size(tDrSSE_flt))
-                for i in cutlass.range_constexpr(cute.size(tDrMax_flt)):
-                    tDrMax_flt[i], tDrSSE_flt[i] = reduction_utils.online_softmax_combine_warp(
-                        m=tDrMax_flt[i],
-                        s=tDrSSE_flt[i],
+                misc_utils.static_assert(cute.size(rMax_flt) == cute.size(rSSE_flt))
+                for i in cutlass.range_constexpr(cute.size(rMax_flt)):
+                    rMax_flt[i], rSSE_flt[i] = reduction_utils.online_softmax_combine_warp(
+                        m=rMax_flt[i],
+                        s=rSSE_flt[i],
                         width=lanes_in_N,
                     )
 
-            warp_N = warp_layout_MN[1]
-            warps_in_N = cutlass.const_expr(cute.size(warp_N))
-            misc_utils.static_assert(warps_in_N == 1)
-
-            tDrMax_m = layout_utils.convert_layout_zero_stride(tDrMax_cur, tDrMax_cur.layout)[None, 0]
-            tDrSSE_m = layout_utils.convert_layout_zero_stride(tDrSSE_cur, tDrSSE_cur.layout)[None, 0]
-            tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, tDrMax_cur.layout)[None, 0]
+            rMax_m = layout_utils.convert_layout_zero_stride(rMax_cur, rMax_cur.layout)[None, 0]
+            rSSE_m = layout_utils.convert_layout_zero_stride(rSSE_cur, rSSE_cur.layout)[None, 0]
+            tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, rMax_cur.layout)[None, 0]
 
             # Write to gmem
             limit_m = min(varlen_manager.len_m(batch_idx) - m_idx * tile_M, tile_M)
@@ -108,16 +107,21 @@ class LSEReduce(VecReduce):
                 )
             gLSE = cute.local_tile(mLSE, (tile_M,), (m_idx,))
             should_write_gmem = is_lane_n_leader
-            if tile_coord_mnkl[1] < limit_n_tiles and should_write_gmem:
+            if n_idx < limit_n_tiles and should_write_gmem:
                 for m in cutlass.range(cute.size(tDcD_m, mode=[0])):
                     row_idx = tDcD_m[m][0]
                     if row_idx < limit_m:
+                        # Empty-tile guard: if no element was ever observed,
+                        # max stays at -inf and sse at 0. Substitute 0 for max
+                        # so the fastmath log(0) flows to a clean -inf instead
+                        # of -inf + log(0), which is implementation-defined
+                        # under fastmath.
                         row_max = (
-                            tDrMax_m[m]
-                            if tDrMax_m[m] > -cute.Float32.inf
+                            rMax_m[m]
+                            if rMax_m[m] > -cute.Float32.inf
                             else cute.Float32.zero
                         )
-                        lse = row_max + cute.math.log(tDrSSE_m[m], fastmath=True)
+                        lse = row_max + cute.math.log(rSSE_m[m], fastmath=True)
                         gLSE[row_idx] = lse.to(dtype=gLSE.dtype)
 
 
@@ -180,7 +184,7 @@ class ColVecLoadNoCast(ColVecLoad):
     @cute.jit
     def begin_loop(self, gemm: GemmSm90, state: list, epi_coord: cute.Coord) -> cute.Tensor:
         tDsV, tDrV_cvt = state[0], state[1]
-        should_load = cutlass.Boolean(True)
+        should_load = cute.Boolean(True)
         if cutlass.const_expr(self.dim == 1):
             if cutlass.const_expr(gemm.epi_m_major):
                 should_load = epi_coord[0] == 0
@@ -222,7 +226,7 @@ class SelectLogits(Epilogue):
     ) -> tuple[cute.Tensor, ...]:
         state = epi_loop_tensors.get(self.logits_name)
         if cutlass.const_expr(state is not None):
-            rLogits, _, coord, tile_coord_mnkl = state
+            rLogits, coord, tile_coord_mnkl = state
             rTarget = epi_loop_tensors.get(self.target_name)
             n_offset_tile = tile_coord_mnkl[1] * gemm.cta_tile_shape_mnk[1]
             logits_dtype = misc_utils.get_dtype(rLogits)
