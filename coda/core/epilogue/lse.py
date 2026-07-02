@@ -1,7 +1,7 @@
 import cutlass
 import cutlass.cute as cute
 
-from quack.epi_ops import EpiOp, ColVecLoad
+from quack.epi_ops import EpiOp, ColVecLoad, EpiContext
 from quack.cute_dsl_utils import ParamsBase
 from quack.gemm_sm90 import GemmSm90
 
@@ -60,19 +60,14 @@ class LSE(Epilogue):
 class ColVecLoadNoCast(ColVecLoad):
 
     @cute.jit
-    def begin(self, gemm, param, smem_tensor, ctx):
-        tDsV, _ = super().begin(
-            gemm=gemm,
-            param=param,
-            smem_tensor=smem_tensor,
-            ctx=ctx,
-        )
+    def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> list:
+        tDsV, _ = super().begin(gemm=gemm, param=param, smem_tensor=smem_tensor, ctx=ctx)
         tDsV_sub = cute.group_modes(tDsV, 3, cute.rank(tDsV))[None, None, None, 0]
         tDrV_cvt = cute.make_rmem_tensor(tDsV_sub.layout, param.element_type)
         return [tDsV, tDrV_cvt]
 
     @cute.jit
-    def begin_loop(self, gemm, state, epi_coord):
+    def begin_loop(self, gemm: GemmSm90, state: list, epi_coord: cute.Coord) -> cute.Tensor:
         tDsV, tDrV_cvt = state[0], state[1]
         should_load = cutlass.Boolean(True)
         if cutlass.const_expr(self.dim == 1):
