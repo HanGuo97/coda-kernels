@@ -6,7 +6,7 @@ from quack import layout_utils
 from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import ParamsBase
 from quack.varlen_utils import VarlenManager
-from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext
+from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext, _get_lane_warp_layouts
 
 from coda.core.ops import misc_utils
 from coda.core.ops import reduction_utils
