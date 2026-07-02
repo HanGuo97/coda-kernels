@@ -1,13 +1,124 @@
+import math
 import cutlass
 import cutlass.cute as cute
 
-from quack.epi_ops import EpiOp, ColVecLoad, EpiContext
+from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext
 from quack.cute_dsl_utils import ParamsBase
 from quack.gemm_sm90 import GemmSm90
+from quack import layout_utils
 
 from coda.core.ops import misc_utils
 from coda.core.ops import reduction_utils
 from coda.core.epilogue.base import Const, Epilogue
+
+
+class LSEReduce(VecReduce):
+
+    dim = 0
+    epi_m_major_preference = -1
+
+    @cute.jit
+    def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> tuple:
+        vec_mma_layout = cute.make_layout((ctx.tile_M, ctx.tile_N), stride=self._broadcast_stride())
+        layout = ctx.partition_for_epilogue_fn(cute.make_rmem_tensor(vec_mma_layout, cute.Float32)).layout
+        tDrMax = cute.make_rmem_tensor(layout, cute.Float32)
+        tDrSSE = cute.make_rmem_tensor(layout, cute.Float32)
+        tRS_cD = ctx.partition_for_epilogue_fn(cute.make_identity_tensor(gemm.cta_tile_shape_mnk[:2]))
+        return (tDrMax, tDrSSE, tRS_cD, ctx.tile_coord_mnkl)
+
+    @cute.jit
+    def begin_loop(self, gemm: GemmSm90, state: tuple, epi_coord: cute.Coord) -> tuple:
+        tDrMax, tDrSSE, tRS_cD, tile_coord_mnkl = state
+        rMax = tDrMax[None, None, None, epi_coord[0], epi_coord[1]]
+        rSSE = tDrSSE[None, None, None, epi_coord[0], epi_coord[1]]
+        coord = tRS_cD[None, None, None, epi_coord[0], epi_coord[1]]
+        if cutlass.const_expr(epi_coord[self._reduce_dim()] == 0):
+            cute.filter_zeros(rMax).fill(-cute.Float32.inf)
+            cute.filter_zeros(rSSE).fill(0.0)
+        return rMax, rSSE, coord, tile_coord_mnkl
+
+    @cute.jit
+    def end_loop(
+        self,
+        gemm: GemmSm90,
+        param: cute.Tensor,
+        state: tuple,
+        epi_coord: cute.Coord,
+        epi_tile: cute.Tile,
+        tiled_copy_t2r: cute.TiledCopy | None,
+        tiled_copy_r2s: cute.TiledCopy | None,
+        tile_coord_mnkl: cute.Coord,
+        varlen_manager: VarlenManager,
+        tidx: cute.Int32,
+    ) -> None:
+        epi_tile_shape = cute.zipped_divide(cute.make_layout(gemm.cta_tile_shape_mnk[:2]), epi_tile).shape[1]
+        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1):
+            m_idx, n_idx, _, batch_idx = tile_coord_mnkl
+            tile_M, tile_N = gemm.cta_tile_shape_mnk[:2]
+
+            tDrMax, tDrSSE, tDcD, _ = state
+            tDrMax_cur = tDrMax[None, None, None, epi_coord[0], epi_coord[1]]
+            tDrSSE_cur = tDrSSE[None, None, None, epi_coord[0], epi_coord[1]]
+            tDcD_cur = tDcD[None, None, None, epi_coord[0], epi_coord[1]]
+            tiled_copy = tiled_copy_t2r if tiled_copy_t2r is not None else tiled_copy_r2s
+            reference_src = tiled_copy_t2r is None
+
+            # ── Derive lane layout from tiled_copy ──
+            lane_layout_MN, warp_layout_MN = _get_lane_warp_layouts(tiled_copy, reference_src)
+            lanes_in_N = cute.size(lane_layout_MN, mode=[1])
+            is_lane_n_leader = cute.arch.lane_idx() % lanes_in_N == 0
+            # Typically lanes_in_N is 4 for Sm90
+            misc_utils.static_assert(
+                lanes_in_N == 1 << int(math.log2(lanes_in_N)),
+                "lanes_in_N must be a power of 2 for butterfly reduction",
+            )
+
+            # Intra-warp shuffle reduction across N lanes
+            if cutlass.const_expr(lanes_in_N > 1):
+                # Assumes threads for each M row are contiguous along N, so
+                # warp_reduction over groups of lanes_in_N matches lane_layout_MN.
+                misc_utils.static_assert(lane_layout_MN.stride[1] == 1)
+                tDrMax_flt = cute.filter_zeros(tDrMax_cur)
+                tDrSSE_flt = cute.filter_zeros(tDrSSE_cur)
+                misc_utils.static_assert(cute.size(tDrMax_flt) == cute.size(tDrSSE_flt))
+                for i in cutlass.range_constexpr(cute.size(tDrMax_flt)):
+                    tDrMax_flt[i], tDrSSE_flt[i] = reduction_utils.online_softmax_combine_warp(
+                        m=tDrMax_flt[i],
+                        s=tDrSSE_flt[i],
+                        width=lanes_in_N,
+                    )
+
+            warp_N = warp_layout_MN[1]
+            warps_in_N = cutlass.const_expr(cute.size(warp_N))
+            misc_utils.static_assert(warps_in_N == 1)
+
+            tDrMax_m = layout_utils.convert_layout_zero_stride(tDrMax_cur, tDrMax_cur.layout)[None, 0]
+            tDrSSE_m = layout_utils.convert_layout_zero_stride(tDrSSE_cur, tDrSSE_cur.layout)[None, 0]
+            tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, tDrMax_cur.layout)[None, 0]
+
+            # Write to gmem
+            limit_m = min(varlen_manager.len_m(batch_idx) - m_idx * tile_M, tile_M)
+            limit_n_tiles = param.shape[2] if not varlen_manager.varlen_m else param.shape[1]
+            if cutlass.const_expr(not varlen_manager.varlen_m):
+                mLSE = param[batch_idx, None, n_idx]
+            else:
+                mLSE = cute.domain_offset(
+                    (varlen_manager.params.cu_seqlens_m[batch_idx],),
+                    param[None, n_idx],
+                )
+            gLSE = cute.local_tile(mLSE, (tile_M,), (m_idx,))
+            should_write_gmem = is_lane_n_leader
+            if tile_coord_mnkl[1] < limit_n_tiles and should_write_gmem:
+                for m in cutlass.range(cute.size(tDcD_m, mode=[0])):
+                    row_idx = tDcD_m[m][0]
+                    if row_idx < limit_m:
+                        row_max = (
+                            tDrMax_m[m]
+                            if tDrMax_m[m] > -cute.Float32.inf
+                            else cute.Float32.zero
+                        )
+                        lse = row_max + cute.math.log(tDrSSE_m[m], fastmath=True)
+                        gLSE[row_idx] = lse.to(dtype=gLSE.dtype)
 
 
 class LSE(Epilogue):
@@ -35,7 +146,7 @@ class LSE(Epilogue):
     ) -> tuple[cute.Tensor, ...]:
         state = epi_loop_tensors.get(self.name)
         if cutlass.const_expr(state is not None):
-            rMaxVec, rSSEVec, _, coord, tile_coord_mnkl = state
+            rMaxVec, rSSEVec, coord, tile_coord_mnkl = state
             n_offset_tile = tile_coord_mnkl[1] * gemm.cta_tile_shape_mnk[1]
             misc_utils.static_assert(cute.size(rMaxVec) == cute.size(rSSEVec))
 
