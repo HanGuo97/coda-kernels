@@ -199,6 +199,29 @@ class ColVecLoadNoCast(ColVecLoad):
         return tDrV_cvt
 
 
+class TargetLogitsSelect(VecReduce):
+
+    dim = 0
+    epi_m_major_preference = -1
+
+    @cute.jit
+    def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> tuple:
+        vec_mma_layout = cute.make_layout((ctx.tile_M, ctx.tile_N), stride=self._broadcast_stride())
+        layout = ctx.partition_for_epilogue_fn(cute.make_rmem_tensor(vec_mma_layout, cute.Float32)).layout
+        tDrLogits = cute.make_rmem_tensor(layout, cute.Float32)
+        tRS_cD = ctx.partition_for_epilogue_fn(cute.make_identity_tensor(gemm.cta_tile_shape_mnk[:2]))
+        return tDrLogits, tRS_cD, ctx.tile_coord_mnkl
+
+    @cute.jit
+    def begin_loop(self, gemm: GemmSm90, state: tuple, epi_coord: cute.Coord) -> tuple:
+        tDrLogits, tRS_cD, tile_coord_mnkl = state
+        rLogits = tDrLogits[None, None, None, epi_coord[0], epi_coord[1]]
+        coord = tRS_cD[None, None, None, epi_coord[0], epi_coord[1]]
+        if cutlass.const_expr(epi_coord[self._reduce_dim()] == 0):
+            cute.filter_zeros(rLogits).fill(-cute.Float32.inf)
+        return rLogits, coord, tile_coord_mnkl
+
+
 class SelectLogits(Epilogue):
 
     def __init__(self, target_name: str | None = None, logits_name: str | None = None) -> None:
