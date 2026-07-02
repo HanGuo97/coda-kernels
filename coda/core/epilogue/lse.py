@@ -57,6 +57,38 @@ class LSE(Epilogue):
         return ()
 
 
+class ColVecLoadNoCast(ColVecLoad):
+
+    @cute.jit
+    def begin(self, gemm, param, smem_tensor, ctx):
+        tDsV, _ = super().begin(
+            gemm=gemm,
+            param=param,
+            smem_tensor=smem_tensor,
+            ctx=ctx,
+        )
+        tDsV_sub = cute.group_modes(tDsV, 3, cute.rank(tDsV))[None, None, None, 0]
+        tDrV_cvt = cute.make_rmem_tensor(tDsV_sub.layout, param.element_type)
+        return [tDsV, tDrV_cvt]
+
+    @cute.jit
+    def begin_loop(self, gemm, state, epi_coord):
+        tDsV, tDrV_cvt = state[0], state[1]
+        should_load = cutlass.Boolean(True)
+        if cutlass.const_expr(self.dim == 1):
+            if cutlass.const_expr(gemm.epi_m_major):
+                should_load = epi_coord[0] == 0
+        else:
+            if cutlass.const_expr(not gemm.epi_m_major):
+                should_load = epi_coord[1] == 0
+        if should_load:
+            tDsV_cur = cute.group_modes(tDsV, 3, cute.rank(tDsV))[None, None, None, epi_coord]
+            tDrV = cute.make_rmem_tensor(tDsV_cur.layout, tDsV_cur.element_type)
+            cute.autovec_copy(cute.filter_zeros(tDsV_cur), cute.filter_zeros(tDrV))
+            tDrV_cvt.store(tDrV.load())
+        return tDrV_cvt
+
+
 class SelectLogits(Epilogue):
 
     def __init__(self, target_name: str | None = None, logits_name: str | None = None) -> None:
@@ -71,7 +103,7 @@ class SelectLogits(Epilogue):
             self.logits_name = "mLogits"
 
     def declares(self) -> tuple[EpiOp, ...]:
-        return (ColVecLoad(self.target_name), TargetLogitsSelect(self.logits_name))
+        return (ColVecLoadNoCast(self.target_name), TargetLogitsSelect(self.logits_name))
 
     @cute.jit
     def visit(
