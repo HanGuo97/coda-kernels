@@ -11,6 +11,7 @@ from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext, _get_lane_wa
 from coda.core.ops import misc_utils
 from coda.core.ops import reduction_utils
 from coda.core.epilogue.base import Const, Epilogue
+from coda.core.epilogue.epi_ops import ColVecStore
 
 
 class LSEReduce(VecReduce):
@@ -108,7 +109,7 @@ class LSEReduce(VecReduce):
             gLSE = cute.local_tile(mLSE, (tile_M,), (m_idx,))
             should_write_gmem = is_lane_n_leader
             if n_idx < limit_n_tiles and should_write_gmem:
-                for m in cutlass.range(cute.size(tDcD_m, mode=[0])):
+                for m in cutlass.range_constexpr(cute.size(tDcD_m, mode=[0])):
                     row_idx = tDcD_m[m][0]
                     if row_idx < limit_m:
                         # Empty-tile guard: if no element was ever observed,
@@ -199,10 +200,7 @@ class ColVecLoadNoCast(ColVecLoad):
         return tDrV_cvt
 
 
-class TargetLogitsSelect(VecReduce):
-
-    dim = 0
-    epi_m_major_preference = -1
+class TargetLogitsSelect(ColVecStore):
 
     @cute.jit
     def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> tuple:
@@ -220,6 +218,48 @@ class TargetLogitsSelect(VecReduce):
         if cutlass.const_expr(epi_coord[self._reduce_dim()] == 0):
             cute.filter_zeros(rLogits).fill(-cute.Float32.inf)
         return rLogits, coord, tile_coord_mnkl
+
+    @cute.jit
+    def end_loop(
+        self,
+        gemm: GemmSm90,
+        param: cute.Tensor,
+        state: tuple,
+        epi_coord: cute.Coord,
+        epi_tile: cute.Tile,
+        tiled_copy_t2r: cute.TiledCopy | None,
+        tiled_copy_r2s: cute.TiledCopy | None,
+        tile_coord_mnkl: cute.Coord,
+        varlen_manager: VarlenManager,
+        tidx: cute.Int32,
+    ) -> None:
+        epi_tile_shape = cute.zipped_divide(cute.make_layout(gemm.cta_tile_shape_mnk[:2]), epi_tile).shape[1]
+        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1):
+            m_idx, n_idx, _, batch_idx = tile_coord_mnkl
+            tile_M, tile_N = gemm.cta_tile_shape_mnk[:2]
+
+            tDrLogits, tDcD, _ = state
+            rLogits_cur = tDrLogits[None, None, None, epi_coord[0], epi_coord[1]]
+            tDcD_cur = tDcD[None, None, None, epi_coord[0], epi_coord[1]]
+
+            rLogits_m = layout_utils.convert_layout_zero_stride(rLogits_cur, rLogits_cur.layout)[None, 0]
+            tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, rLogits_cur.layout)[None, 0]
+
+            # Write to gmem
+            limit_m = min(varlen_manager.len_m(batch_idx) - m_idx * tile_M, tile_M)
+            if cutlass.const_expr(not varlen_manager.varlen_m):
+                mLogits = param[batch_idx, None]
+            else:
+                mLogits = cute.domain_offset(
+                    (varlen_manager.params.cu_seqlens_m[batch_idx],),
+                    param,
+                )
+            gLogits = cute.local_tile(mLogits, (tile_M,), (m_idx,))
+            for m in cutlass.range_constexpr(cute.size(tDcD_m, mode=[0])):
+                row_idx = tDcD_m[m][0]
+                if row_idx < limit_m:
+                    if rLogits_m[m] != -cute.Float32.inf:
+                        gLogits[row_idx] = rLogits_m[m].to(dtype=gLogits.dtype)
 
 
 class SelectLogits(Epilogue):
