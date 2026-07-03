@@ -9,6 +9,8 @@ from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, V
 from quack.epi_composable import ComposableEpiMixin
 from quack.rounding import RoundingMode
 
+from coda.core.epilogue.epi_ops import ColVecStore
+
 FieldSpec = tuple[str, object, object]
 
 
@@ -109,7 +111,7 @@ def _arg_field(op: EpiOp) -> FieldSpec:
         else:
             dtype = op.dtype
         return (op.name, dtype | cute.Tensor | None, None)
-    if isinstance(op, (RowVecLoad, ColVecLoad, TileLoad, VecReduce)):
+    if isinstance(op, (RowVecLoad, ColVecLoad, TileLoad, VecReduce, ColVecStore)):
         return (op.name, cute.Tensor | None, None)
     if isinstance(op, TileStore):
         return (op.name, cute.Tensor, MISSING)

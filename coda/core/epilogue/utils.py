@@ -17,6 +17,7 @@ from quack.epi_ops import (
     RowVecLoad,
 )
 
+from coda.core.epilogue.epi_ops import ColVecStore
 from coda.core.ops.torch_utils import (
     preprocess_vector,
     preprocess_tensor,
@@ -95,7 +96,7 @@ def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> di
             epi_args_preprocessed[name] = arg
             continue
         op = epi_op_by_name[name]
-        if isinstance(op, (ColVecLoad, RowVecLoad)):
+        if isinstance(op, (ColVecLoad, RowVecLoad, ColVecStore)):
             assert arg.is_contiguous()
             epi_args_preprocessed[name] = preprocess_vector(arg, permute=False)
         elif isinstance(op, VecReduce):
@@ -162,6 +163,13 @@ def _make_fake_epi_arg(
             shape=(m, _n, l),
             divisibility=div_for_dtype(cutlass_dtype),
             leading_dim=leading_dim,
+        )
+    if isinstance(op, ColVecStore):
+        return quack_make_fake_tensor(
+            dtype=cutlass_dtype,
+            shape=(l, m),
+            divisibility=1,
+            leading_dim=1,
         )
     raise NotImplementedError
 
