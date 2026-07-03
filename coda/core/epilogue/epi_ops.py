@@ -4,7 +4,7 @@ from quack.epi_ops import EpiOp, assume_stride_divisibility
 class ColVecStore(EpiOp):
 
     dim = 0
-    epi_m_major_preference = 0
+    epi_m_major_preference = -1
 
     def param_fields(self):
         return [(self.name, object, None)]
