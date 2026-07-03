@@ -185,6 +185,7 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
     epi_const_fields = tuple(c.field() for c in epilogue.declare_constexprs())
     fields = [_arg_field(op) for op in ops]
     fields.append(("rounding_mode", cutlass.Constexpr[int], RoundingMode.RN))
+    fields.append(("add_to_output", cutlass.Constexpr[bool], False))
     fields.extend(epi_const_fields)
 
     class EpiMixin(ComposableEpiMixin):
