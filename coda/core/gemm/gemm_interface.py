@@ -1,4 +1,3 @@
-import os
 import torch
 import functools
 import cutlass
@@ -35,10 +34,6 @@ from quack.gemm_tvm_ffi_utils import (
 )
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
-
-# Disable quack's @autotune parallel-subprocess precompile
-# since it pickles the call args to workers
-os.environ.setdefault("QUACK_COMPILE_WORKERS", "1")
 
 # Disable quack's persistent cache
 quack.cache.CACHE_ENABLED = False
