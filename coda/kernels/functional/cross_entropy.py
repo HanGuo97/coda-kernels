@@ -1,8 +1,5 @@
 import torch
-
 from quack.cross_entropy import cross_entropy_fwd
-from quack.gemm_interface import gemm as quack_gemm
-from quack.gemm_interface import gemm_add_inplace
 
 from coda.core.gemm.functional import gemm, gemm_ce_grad, gemm_linear_ce
 
@@ -29,13 +26,13 @@ def _forward_lse(
     target: torch.Tensor,
     ignore_index: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    losses, lse, _ = gemm_linear_ce(
+    losses, lses, _ = gemm_linear_ce(
         x,
         weight.mT,
         target=target,
         ignore_index=ignore_index,
     )
-    return losses, lse
+    return losses, lses
 
 
 def _backward_dlogits(
@@ -43,9 +40,17 @@ def _backward_dlogits(
     weight: torch.Tensor,
     dlogits: torch.Tensor,
     dloss: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    dx = gemm(dlogits, weight, alpha=dloss)
-    dweight = gemm(dlogits.mT, x, alpha=dloss)
+    need_dx: bool,
+    need_dweight: bool,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if need_dx:
+        dx = gemm(dlogits, weight, alpha=dloss)
+    else:
+        dx = None
+    if need_dweight:
+        dweight = gemm(dlogits.mT, x, alpha=dloss)
+    else:
+        dweight = None
     return dx, dweight
 
 
