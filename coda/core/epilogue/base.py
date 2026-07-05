@@ -190,6 +190,7 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
 
     class EpiMixin(ComposableEpiMixin):
         _epi_ops = ops
+        _epi_op_by_name = {op.name: op for op in ops}
         _extra_param_fields = epi_const_fields
         _aux_op = aux_op
         _epilogue = epilogue
