@@ -229,7 +229,7 @@ def _gemm_epilogue(
     scheduler_args = make_scheduler_args(
         max_active_clusters=max_active_clusters,
         max_swizzle_size=max_swizzle_size,
-        tile_count_semaphore=tile_count_semaphore,
+        tile_count_semaphore=tile_count_semaphore if (is_dynamic_persistent and device_capacity[0] <= 9) else None,
         batch_idx_permute=batch_idx_permute,
     )
     varlen_args = make_varlen_args(
