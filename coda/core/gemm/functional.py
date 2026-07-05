@@ -14,11 +14,22 @@ from coda.core.gemm.registry import GemmSwiGLU
     ],
     cache_results=False,
 )
-def _gemm_tuned(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, backend: str) -> None:
+def _gemm_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    out: torch.Tensor,
+    alpha: torch.Tensor | None,
+    backend: str,
+) -> None:
     if backend == "quack":
-        quack_gemm(A=A, B=B, out=out, tuned=True)
+        if alpha is None:
+            quack_gemm(A=A, B=B, out=out, tuned=True)
+        else:
+            quack_gemm(A=A, B=B, out=out, alpha=alpha, tuned=True)
     else:
         torch.matmul(A, B, out=out)
+        if alpha is not None:
+            out.mul_(alpha)
 
 
 @_kernel_op("coda::gemm", mutates_args=("out",))
