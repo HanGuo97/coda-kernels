@@ -2,6 +2,7 @@ import torch
 from quack.cross_entropy import cross_entropy_fwd
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
+from coda.core.elementwise.functional import cross_entropy_dlogits
 from coda.core.gemm.functional import gemm, gemm_lse
 
 
