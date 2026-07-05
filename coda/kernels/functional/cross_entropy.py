@@ -107,22 +107,31 @@ class LinearCrossEntropy(torch.autograd.Function):
     def backward(ctx, dloss: torch.Tensor) -> tuple[torch.Tensor | None, torch.Tensor | None, None, None, None, None]:
         if ctx.chunk_size is None:
             x, weight, dlogits, scale = ctx.saved_tensors
+            if scale is not None:
+                dloss_scaled = dloss * scale
+            else:
+                dloss_scaled = dloss
             dx, dweight = _backward_dlogits(
                 x=x,
                 weight=weight,
                 dlogits=dlogits,
-                dloss=(dloss * scale),
+                dloss=dloss_scaled,
                 need_dx=ctx.needs_input_grad[0],
                 need_dweight=ctx.needs_input_grad[1],
             )
         else:
             x, weight, target, lses, scale = ctx.saved_tensors
+            if scale is not None:
+                dloss_scaled = dloss * scale
+            else:
+                dloss_scaled = dloss
             dx, dweight = linear_ce_backward(
                 x=x,
                 weight=weight,
                 target=target,
                 lses=lses,
-                dloss=(dloss * scale),
+                dloss=dloss_scaled,
+                ignore_index=ctx.ignore_index,
                 chunk_size=ctx.chunk_size,
                 need_dx=ctx.needs_input_grad[0],
                 need_dweight=ctx.needs_input_grad[1],
