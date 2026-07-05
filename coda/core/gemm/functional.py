@@ -22,15 +22,21 @@ def _gemm_tuned(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, backend: st
 
 
 @_kernel_op("coda::gemm", mutates_args=("out",))
-def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor) -> None:
-    _gemm_tuned(A=A, B=B, out=out)
+def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, alpha: torch.Tensor | None) -> None:
+    _gemm_tuned(A=A, B=B, out=out, alpha=alpha)
 
 
-def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def gemm(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    out: torch.Tensor | None = None,
+    alpha: torch.Tensor | None = None,
+) -> torch.Tensor:
     M, _ = A.shape
     _, N = B.shape
-    out = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    _gemm(A=A, B=B, out=out)
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    _gemm(A=A, B=B, out=out, alpha=alpha)
     return out
 
 

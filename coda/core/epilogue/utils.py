@@ -10,6 +10,7 @@ from quack.epi_composable import ComposableEpiMixin
 from quack.gemm_tvm_ffi_utils import div_for_dtype
 from quack.epi_ops import (
     EpiOp,
+    Scalar,
     TileLoad,
     TileStore,
     VecReduce,
@@ -59,10 +60,7 @@ def _key_field(op: EpiOp, tensor: torch.Tensor) -> EpilogueKeyTensor:
 
 
 def make_epi_keys(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> tuple[EpilogueKeyTensor | EpilogueKeyConst, ...]:
-    epi_op_by_name = {
-        op.name: op
-        for op in GemmCls._epi_ops
-    }
+    epi_op_by_name = GemmCls._epi_op_by_name
     epi_const_names = {
         name
         for name, _, _ in GemmCls._extra_param_fields
@@ -86,10 +84,7 @@ def make_epi_keys(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> tuple[Ep
 
 
 def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> dict:
-    epi_op_by_name = {
-        op.name: op
-        for op in GemmCls._epi_ops
-    }
+    epi_op_by_name = GemmCls._epi_op_by_name
     epi_args_preprocessed = {}
     for name, arg in epi_args.items():
         if not isinstance(arg, torch.Tensor):
@@ -104,6 +99,11 @@ def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> di
             epi_args_preprocessed[name] = preprocess_tensor(arg, permute=False)
         elif isinstance(op, (TileLoad, TileStore)):
             epi_args_preprocessed[name] = preprocess_tensor(arg, permute=True)
+        elif isinstance(op, Scalar):
+            # fp32: the compiled fake assumes 4-byte alignment
+            assert arg.numel() == 1
+            assert arg.dtype == torch.float32
+            epi_args_preprocessed[name] = arg
         else:
             raise TypeError
     return epi_args_preprocessed
@@ -117,7 +117,7 @@ def _make_fake_epi_arg(
     n: cute.SymInt,
     k: cute.SymInt,
     l: cute.SymInt,
-) -> cute.Tensor:
+) -> cute.Tensor | cute.Pointer:
     cutlass_dtype: type[cute.Numeric] = torch2cute_dtype_map[dtype]
     if isinstance(op, ColVecLoad):
         return quack_make_fake_tensor(
@@ -171,6 +171,13 @@ def _make_fake_epi_arg(
             divisibility=1,
             leading_dim=1,
         )
+    if isinstance(op, Scalar):
+        return cute.runtime.make_ptr(
+            dtype=cutlass_dtype,
+            value=0,
+            mem_space=cute.AddressSpace.gmem,
+            assumed_align=4,
+        )
     raise NotImplementedError
 
 
@@ -185,11 +192,8 @@ def compile_epi_args(
     k: cute.SymInt,
     l: cute.SymInt,
 ) -> tuple:
-    epi_op_by_name = {
-        op.name: op
-        for op in GemmCls._epi_ops
-    }
     EpiArgCls = GemmCls.EpilogueArguments
+    epi_op_by_name = GemmCls._epi_op_by_name
     epi_args_fake = {
         "add_to_output": add_to_output,
         "rounding_mode": rounding_mode,
@@ -228,12 +232,16 @@ def process_epi_args(
     assert rounding_mode is None
     assert sr_seed is None
     EpiArgCls = GemmCls.EpilogueArguments
+    epi_op_by_name = GemmCls._epi_op_by_name
     epi_args_processed = {}
     for name in EpiArgCls._fields:
         # certain fields (`rounding_mode`, etc) aren't in `epi_args`
         epi_arg = epi_args.get(name, None)
         if isinstance(epi_arg, torch.Tensor):
-            epi_args_processed[name] = epi_arg
+            if isinstance(epi_op_by_name[name], Scalar):
+                epi_args_processed[name] = epi_arg.data_ptr()
+            else:
+                epi_args_processed[name] = epi_arg
         else:
             epi_args_processed[name] = None
     return EpiArgCls(**epi_args_processed)
