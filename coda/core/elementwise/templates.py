@@ -161,9 +161,32 @@ def _compile_elementwise(
     val_m: int,
 ) -> Callable:
     m = cute.sym_int()
-    mX = cute.runtime.make_fake_tensor(dtype=x_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
-    mY = cute.runtime.make_fake_tensor(dtype=y_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
-    mZ = cute.runtime.make_fake_tensor(dtype=z_dtype, shape=(m, size), stride=(size, 1), assumed_align=16)
+    vector_size = cutlass.const_expr(
+        128 //
+        cutlass.max(
+            x_dtype.width,
+            y_dtype.width,
+            z_dtype.width,
+        )
+    )
+    mX = cute.runtime.make_fake_tensor(
+        dtype=x_dtype,
+        shape=(m, size),
+        stride=(cute.sym_int64(divisibility=vector_size), 1),
+        assumed_align=16,
+    )
+    mY = cute.runtime.make_fake_tensor(
+        dtype=y_dtype,
+        shape=(m, size),
+        stride=(cute.sym_int64(divisibility=vector_size), 1),
+        assumed_align=16,
+    )
+    mZ = cute.runtime.make_fake_tensor(
+        dtype=z_dtype,
+        shape=(m, size),
+        stride=(cute.sym_int64(divisibility=vector_size), 1),
+        assumed_align=16,
+    )
     stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     return cute.compile(
         elementwise_apply,
