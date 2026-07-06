@@ -2,7 +2,6 @@ import torch
 from quack.cross_entropy import cross_entropy_fwd
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
-from coda.core.elementwise.functional import cross_entropy_dlogits
 from coda.core.gemm.functional import gemm, gemm_lse
 
 
@@ -22,6 +21,7 @@ def _forward_dlogits(
     )
 
 
+@torch.compile(dynamic=False, fullgraph=True)
 def _forward_lse(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -29,12 +29,19 @@ def _forward_lse(
     ignore_index: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     logits, lses = gemm_lse(x, weight.mT)
-    return cross_entropy_dlogits(
-        lses=lses,
-        logits=logits,
-        target=target,
-        ignore_index=ignore_index,
-    )
+    ignore = (target == ignore_index)
+    ignore_ = ignore[:, None].to(dtype=logits.dtype)
+    # mask out, say, target = -100 which would crash gather/scatter
+    safe_target = torch.where(ignore, 0, target)[:, None]
+    target_logits = torch.gather(logits, dim=1, index=safe_target)
+    target_logits = torch.squeeze(target_logits, dim=1)
+    losses = torch.where(ignore, 0.0, lses - target_logits)
+    # backward
+    logits.sub_(lses[:, None])
+    logits.exp_()
+    logits.mul_(1.0 - ignore_)
+    logits.scatter_add_(dim=1, index=safe_target, src=ignore_ - 1.0)
+    return losses, logits
 
 
 def _backward_dlogits(
