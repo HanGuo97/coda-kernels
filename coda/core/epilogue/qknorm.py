@@ -51,6 +51,7 @@ class QKNorm(Epilogue):
                 tRS_rInput=tRS_rD,
                 rScale=tRS_rD,
             )
+
             if cutlass.const_expr(lanes_in_N > 1):
                 rSSq_flt = cute.filter_zeros(rSSq)
                 for i in cutlass.range_constexpr(cute.size(rSSq_flt)):
