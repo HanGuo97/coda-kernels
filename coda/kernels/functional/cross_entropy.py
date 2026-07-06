@@ -2,7 +2,7 @@ import torch
 from quack.cross_entropy import cross_entropy_fwd
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
-from coda.core.gemm.functional import gemm, gemm_lse
+from coda.core.gemm.functional import gemm, gemm_lse, gemm_lse_select_logits
 
 
 def _forward_dlogits(
@@ -140,3 +140,25 @@ def linear_cross_entropy(
         reduction,
         fused_lse,
     )
+
+
+def linear_cross_entropy_forward(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    target: torch.Tensor,
+    ignore_index: int = -100,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    assert reduction in ("mean", "sum")
+    losses, _, _ = gemm_lse_select_logits(
+        x,
+        weight.mT,
+        target=target,
+        ignore_index=ignore_index,
+    )
+    if reduction == "mean":
+        scale = 1.0 / (target != ignore_index).sum().float()
+        loss = losses.sum() * scale
+    else:
+        loss = losses.sum()
+    return loss
