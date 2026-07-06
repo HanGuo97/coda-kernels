@@ -3,7 +3,7 @@ from quack.activation import gate_fn_map
 
 from coda.core.epilogue.base import compose
 from coda.core.epilogue.activation import Gated
-from coda.core.epilogue.lse import LSE, SelectLogits, CEGrad
+from coda.core.epilogue.lse import LSE, SelectLogits
 
 
 GemmSwiGLU = (
@@ -16,23 +16,23 @@ GemmSwiGLU = (
     )
 )
 
-GemmLinearCE = (
-    compose(
-        [
-            SelectLogits(),
-            LSE(),
-        ]
-    )
+GemmLSE = (
+    LSE()
     .bind(
-        name="GemmLinearCE",
+        name="GemmLSE",
         gemm_cls=GemmSm90,
     )
 )
 
-GemmCEGrad = (
-    CEGrad()
+GemmLSESelectLogits = (
+    compose(
+        [
+            LSE(),
+            SelectLogits(),
+        ]
+    )
     .bind(
-        name="GemmCEGrad",
+        name="GemmLSESelectLogits",
         gemm_cls=GemmSm90,
     )
 )
