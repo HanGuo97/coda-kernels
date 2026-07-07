@@ -134,8 +134,8 @@ class RoPE(Epilogue):
         if cutlass.const_expr(pos_idx is not None and inv_freq is not None):
             for i in cutlass.range_constexpr(cute.size(tRS_rD) // 2):
                 a = pos_idx[2 * i].to(dtype=gemm.acc_dtype) * inv_freq[2 * i].to(dtype=gemm.acc_dtype)
-                c = cute.math.cos(a)
-                s = cute.math.sin(a)
+                c = cute.math.cos(a, fastmath=True)
+                s = cute.math.sin(a, fastmath=True)
                 x = tRS_rD[2 * i]
                 y = tRS_rD[2 * i + 1]
                 tRS_rD[2 * i] = x * c + y * s
