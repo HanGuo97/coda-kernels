@@ -56,9 +56,9 @@ def cross_entropy_fwd_bwd_kernel(
         ignored = target == ignore_index
 
         for col_index in cutlass.range_constexpr(vector_size):
-            flat_coord = row_index * vector_size + col_index
-            _, col_coord = tXcLogits[flat_coord]
-            logits = tXrLogits[flat_coord].to(dtype=cute.Float32)
+            flat_index = row_index * vector_size + col_index
+            _, col_coord = tXcLogits[flat_index]
+            logits = tXrLogits[flat_index].to(dtype=cute.Float32)
             probs = cute.math.exp(logits - lse, fastmath=True)
             dlogits = probs
 
@@ -70,7 +70,7 @@ def cross_entropy_fwd_bwd_kernel(
             if ignored:
                 dlogits = cute.Float32.zero
 
-            tXrLogits[flat_coord] = dlogits.to(dtype=tXrLogits.element_type)
+            tXrLogits[flat_index] = dlogits.to(dtype=tXrLogits.element_type)
 
     _ = memory_utils.copy(
         src=tXrLogits,
