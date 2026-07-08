@@ -35,9 +35,6 @@ from quack.gemm_tvm_ffi_utils import (
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
 
-# Disable quack's persistent cache
-quack.cache.CACHE_ENABLED = False
-
 
 @jit_cache
 def _compile_gemm(
