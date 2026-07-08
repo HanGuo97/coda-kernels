@@ -8,10 +8,10 @@ from quack.cache import jit_cache
 from quack.autotuner import autotune, AutotuneConfig
 from quack.cute_dsl_utils import torch2cute_dtype_map
 
+from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
-from coda.core.ops.misc_utils import static_assert
 
 
 @cute.kernel
@@ -115,21 +115,24 @@ def elementwise_apply(
             mZ.element_type.width,
         )
     )
-    static_assert(len(mX.shape) == 2)
-    static_assert(len(mY.shape) == 2)
-    static_assert(len(mZ.shape) == 2)
-    static_assert(mX.shape[1] == mY.shape[1])
-    static_assert(mX.shape[1] == mZ.shape[1])
-    static_assert(mX.shape[1] % vector_size == 0)
-    thr_layout = layout_utils.make_ordered_layout((thr_m, thr_n), order="row")
-    val_layout = layout_utils.make_ordered_layout((val_m, vector_size), order="row")
-    tiler_mn, tv_layout = cute.make_layout_tv(thr_layout, val_layout)
+    misc_utils.static_assert(len(mX.shape) == 2)
+    misc_utils.static_assert(len(mY.shape) == 2)
+    misc_utils.static_assert(len(mZ.shape) == 2)
+    misc_utils.static_assert(mX.shape[1] == mY.shape[1])
+    misc_utils.static_assert(mX.shape[1] == mZ.shape[1])
+    misc_utils.static_assert(mX.shape[1] % vector_size == 0)
+    tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
+        thread_shape=(thr_m, thr_n),
+        thread_order="row",
+        value_shape=(val_m, vector_size),
+        value_order="row",
+    )
 
     # ((TileM, TileN), (RestM, RestN))
     gX = cute.zipped_divide(mX, tiler_mn)
     num_blocks = gX.shape[1]
     num_threads = cute.size(tv_layout, mode=[0])
-    static_assert(len(num_blocks) == 2)
+    misc_utils.static_assert(len(num_blocks) == 2)
     kernel = elementwise_apply_kernel(
         fn,
         mX,
@@ -223,7 +226,7 @@ def _elementwise_op(
         thr_n=thr_n,
         val_m=val_m,
     )
-    compiled_fn(mX=X, mY=Y, mZ=Z)
+    compiled_fn(X, Y, Z)
 
 
 @autotune(
