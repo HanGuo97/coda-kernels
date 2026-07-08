@@ -20,7 +20,7 @@ def warp_reduce(
 ) -> Sequence[Numeric] | cute.TensorSSA:
 
     if cutlass.const_expr(isinstance(xs, cute.TensorSSA)):
-        ys = cute.make_fragment(xs.shape, xs.dtype)
+        ys = cute.make_rmem_tensor(xs.shape, xs.dtype)
         ys.store(xs)
         for k in cutlass.range_constexpr(cute.size(xs.shape)):
             (ys[k],) = warp_reduce((ys[k],), op=op, width=width)
