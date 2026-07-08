@@ -1,7 +1,11 @@
 import torch
 import cutlass
 import cutlass.cute as cute
+import cuda.bindings.driver as cuda
+from typing import Callable
+
 from quack.cache import jit_cache
+from quack.cute_dsl_utils import torch2cute_dtype_map
 from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
@@ -82,6 +86,59 @@ def cross_entropy_fwd_bwd_kernel(
     )
 
 
+@jit_cache
+def _compile_cross_entropy_fwd_bwd(
+    vocab_size: int,
+    ignore_index: int,
+    logits_dtype: type[cute.Numeric],
+    target_dtype: type[cute.Numeric],
+    thr_m: int,
+    thr_n: int,
+    val_m: int,
+) -> Callable:
+    m = cute.sym_int(divisibility=thr_m * val_m)
+    vector_size = cutlass.const_expr(_NUM_BITS // logits_dtype.width)
+    target_align = cutlass.const_expr(target_dtype.width // 8)
+    mLogits = cute.runtime.make_fake_tensor(
+        dtype=logits_dtype,
+        shape=(m, vocab_size),
+        stride=(cute.sym_int64(divisibility=vector_size), 1),
+        assumed_align=16,
+    )
+    mLSE = cute.runtime.make_fake_tensor(
+        dtype=cute.Float32,
+        shape=(m,),
+        stride=(1,),
+        assumed_align=4,
+    )
+    mTarget = cute.runtime.make_fake_tensor(
+        dtype=target_dtype,
+        shape=(m,),
+        stride=(1,),
+        assumed_align=target_align,
+    )
+    mLoss = cute.runtime.make_fake_tensor(
+        dtype=cute.Float32,
+        shape=(m,),
+        stride=(1,),
+        assumed_align=4,
+    )
+    stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
+    return cute.compile(
+        _cross_entropy_fwd_bwd,
+        mLogits=mLogits,
+        mLSE=mLSE,
+        mTarget=mTarget,
+        mLoss=mLoss,
+        ignore_index=ignore_index,
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+        stream=stream,
+        options="--enable-tvm-ffi",
+    )
+
+
 def cross_entropy_fwd_bwd_(
     logits: torch.Tensor,
     lses: torch.Tensor,
@@ -90,19 +147,15 @@ def cross_entropy_fwd_bwd_(
     ignore_index: int,
     thr_m: int,
     thr_n: int,
-    num_rows: int,
+    val_m: int,
 ) -> None:
     assert target.dtype == torch.int32
     fn = _compile_cross_entropy_fwd_bwd(
         vocab_size=logits.shape[1],
         ignore_index=ignore_index,
+        logits_dtype=torch2cute_dtype_map[logits.dtype],
         thr_m=thr_m,
         thr_n=thr_n,
-        num_rows=num_rows,
+        val_m=val_m,
     )
-    fn(
-        mLogits=logits,
-        mLSE=lses,
-        mTarget=target,
-        mLoss=losses,
-    )
+    fn(logits, lses, target, losses)
