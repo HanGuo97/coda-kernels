@@ -35,8 +35,11 @@ def make_layout_tv_from_shape(
     value_shape: tuple[int, int],
     value_order: tuple[int, int] | str,
 ) -> tuple[tuple[int, int], cute.Layout]:
-    assert cutlass.const_expr(len(thread_shape) == 2)
-    assert cutlass.const_expr(len(value_shape) == 2)
+    num_threads = thread_shape[0] * thread_shape[1]
+    static_assert(len(thread_shape) == 2)
+    static_assert(len(value_shape) == 2)
+    static_assert(num_threads % 32 == 0)
+    static_assert(num_threads <= 1024)
     thread_layout = make_ordered_layout(shape=thread_shape, order=thread_order)
     value_layout = make_ordered_layout(shape=value_shape, order=value_order)
     tiler_mn, layout_tv = cute.make_layout_tv(

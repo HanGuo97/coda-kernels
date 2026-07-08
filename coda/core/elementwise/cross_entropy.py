@@ -22,7 +22,7 @@ def cross_entropy_fwd_bwd_kernel(
     ignore_index: cutlass.Constexpr[int],
     tiler_mn: cute.Shape,
     tv_layout: cute.Layout,
-    num_rows: cutlass.Constexpr[int],
+    val_m: cutlass.Constexpr[int],
     vector_size: cutlass.Constexpr[int],
 ) -> None:
     tidx, _, _ = cute.arch.thread_idx()
@@ -52,7 +52,7 @@ def cross_entropy_fwd_bwd_kernel(
     tXrLogits = copy_outputs.dst_thread
     tXcLogits = copy_outputs.crd_thread
 
-    for row_index in cutlass.range_constexpr(num_rows):
+    for row_index in cutlass.range_constexpr(val_m):
         row_coord, _ = tXcLogits[row_index * vector_size]
         lse = mLSE[row_coord]
         target = mTarget[row_coord]
@@ -84,6 +84,58 @@ def cross_entropy_fwd_bwd_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     )
+
+
+@cute.jit
+def _cross_entropy_fwd_bwd(
+    mLogits: cute.Tensor,
+    mLSE: cute.Tensor,
+    mTarget: cute.Tensor,
+    mLoss: cute.Tensor,
+    ignore_index: cutlass.Constexpr[int],
+    thr_m: cutlass.Constexpr[int],
+    thr_n: cutlass.Constexpr[int],
+    val_m: cutlass.Constexpr[int],
+    stream: cuda.CUstream,
+) -> int:
+    vector_size = cutlass.const_expr(_NUM_BITS // mLogits.element_type.width)
+    misc_utils.static_assert(len(mLogits.shape) == 2)
+    misc_utils.static_assert(len(mLSE.shape) == 1)
+    misc_utils.static_assert(len(mTarget.shape) == 1)
+    misc_utils.static_assert(len(mLoss.shape) == 1)
+    misc_utils.static_assert(mLogits.shape[1] % vector_size == 0)
+    misc_utils.static_assert(mLogits.shape[1] % (thr_n * vector_size) == 0)
+    tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
+        thread_shape=(thr_m, thr_n),
+        thread_order="row",
+        value_shape=(val_m, vector_size),
+        value_order="row",
+    )
+
+    # ((TileM, TileN), (RestM, RestN))
+    gLogits = cute.zipped_divide(mLogits, tiler_mn)
+    num_blocks = gLogits.shape[1]
+    num_threads = cute.size(tv_layout, mode=[0])
+    misc_utils.static_assert(len(num_blocks) == 2)
+    kernel = cross_entropy_fwd_bwd_kernel(
+        mLogits=mLogits,
+        mLSE=mLSE,
+        mTarget=mTarget,
+        mLoss=mLoss,
+        ignore_index=ignore_index,
+        tiler_mn=tiler_mn,
+        tv_layout=tv_layout,
+        val_m=val_m,
+        vector_size=vector_size,
+    )
+    kernel.launch(
+        grid=[*num_blocks, 1],
+        block=[num_threads, 1, 1],
+        cluster=None,
+        smem=None,
+        stream=stream,
+    )
+    return kernel.smem_usage()
 
 
 @jit_cache
@@ -154,6 +206,7 @@ def cross_entropy_fwd_bwd_(
         vocab_size=logits.shape[1],
         ignore_index=ignore_index,
         logits_dtype=torch2cute_dtype_map[logits.dtype],
+        target_dtype=torch2cute_dtype_map[target.dtype],
         thr_m=thr_m,
         thr_n=thr_n,
         val_m=val_m,
