@@ -1,3 +1,4 @@
+import sys
 import cutlass
 import cutlass.cute as cute
 from dataclasses import MISSING
@@ -44,8 +45,21 @@ class Epilogue(object):
     def auxiliary_mixin(self) -> type | None:
         return None
 
-    def bind(self, name: str, gemm_cls: type) -> type:
-        return _lower(self, name=name, gemm_cls=gemm_cls)
+    def bind(self, name: str, gemm_cls: type, module: str | None = None) -> type:
+        cls = _lower(self, name=name, gemm_cls=gemm_cls)
+
+        # for this to be pickle-able
+        # https://github.com/python/cpython/blob/main/Lib/collections/__init__.py
+        if module is None:
+            try:
+                module = sys._getframemodulename(1) or "__main__"
+            except AttributeError:
+                module = sys._getframe(1).f_globals.get("__name__", "__main__")
+
+        cls.__module__ = module
+        cls.EpilogueArguments.__module__ = module
+        cls.EpilogueArguments.__qualname__ = f"{name}.EpilogueArguments"
+        return cls
 
 
 class _Composite(Epilogue):
