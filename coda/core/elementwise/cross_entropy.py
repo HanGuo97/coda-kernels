@@ -6,7 +6,6 @@ from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 
-
 _NUM_BITS = 128
 
 
@@ -80,4 +79,30 @@ def cross_entropy_fwd_bwd_kernel(
         config=config,
         thread_index=tidx,
         smem_allocator=allocator,
+    )
+
+
+def cross_entropy_fwd_bwd_(
+    logits: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    losses: torch.Tensor,
+    ignore_index: int,
+    thr_m: int,
+    thr_n: int,
+    num_rows: int,
+) -> None:
+    assert target.dtype == torch.int32
+    fn = _compile_cross_entropy_fwd_bwd(
+        vocab_size=logits.shape[1],
+        ignore_index=ignore_index,
+        thr_m=thr_m,
+        thr_n=thr_n,
+        num_rows=num_rows,
+    )
+    fn(
+        mLogits=logits,
+        mLSE=lses,
+        mTarget=target,
+        mLoss=losses,
     )
