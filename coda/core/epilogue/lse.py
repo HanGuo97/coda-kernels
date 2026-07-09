@@ -174,8 +174,8 @@ class LSE(Epilogue):
                 if cutlass.const_expr(is_full_tile) or col_idx_offset < params.vocab_size:
                     rMaxVec[i] = cute.arch.fmax(rMaxVec[i], tRS_rD[i])
 
-            for j in cutlass.range_constexpr(cute.size(rSSE_flt)):
-                rSSE_flt[j] = rSSE_flt[j] * cute.math.exp(rMax_old[j] - rMax_flt[j], fastmath=True)
+            for i_flt in cutlass.range_constexpr(cute.size(rSSE_flt)):
+                rSSE_flt[i_flt] = rSSE_flt[i_flt] * cute.math.exp(rMax_old[i_flt] - rMax_flt[i_flt], fastmath=True)
 
             for i in cutlass.range_constexpr(cute.size(rMaxVec)):
                 col_idx = coord[i][1]
