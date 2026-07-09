@@ -2,7 +2,7 @@ import torch
 from quack.cross_entropy import cross_entropy_fwd
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
-from coda.core.gemm.functional import gemm, gemm_lse, gemm_lse_select_logits
+from coda.core.gemm.functional import gemm, gemm_lse, gemm_lse_fwd_bwd, gemm_lse_select_logits
 
 
 def _forward_dlogits(
@@ -21,8 +21,31 @@ def _forward_dlogits(
     )
 
 
-@torch.compile(dynamic=False, fullgraph=True)
 def _forward_lse(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    target: torch.Tensor,
+    ignore_index: int,
+    use_cutedsl: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if use_cutedsl:
+        return gemm_lse_fwd_bwd(
+            x,
+            weight.mT,
+            target=target,
+            ignore_index=ignore_index,
+        )
+    else:
+        return _forward_lse_torch(
+            x=x,
+            weight=weight,
+            target=target,
+            ignore_index=ignore_index,
+        )
+
+
+@torch.compile(dynamic=False, fullgraph=True)
+def _forward_lse_torch(
     x: torch.Tensor,
     weight: torch.Tensor,
     target: torch.Tensor,
