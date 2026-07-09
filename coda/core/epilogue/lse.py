@@ -155,6 +155,14 @@ class LSE(Epilogue):
             n_offset_tile = tile_coord_mnkl[1] * gemm.cta_tile_shape_mnk[1]
             misc_utils.static_assert(cute.size(rMaxVec) == cute.size(rSSEVec))
 
+            rMax_flt = cute.filter_zeros(rMaxVec)
+            rSSE_flt = cute.filter_zeros(rSSEVec)
+            rMax_old = cute.make_rmem_tensor_like(rMax_flt)
+            cute.autovec_copy(rMax_flt, rMax_old)
+
+            # fast path when the vocab size occupies the entire tile.
+            is_full_tile = cutlass.const_expr(params.vocab_size % gemm.cta_tile_shape_mnk[1] == 0)
+
             for i in cutlass.range_constexpr(cute.size(rMaxVec)):
                 # Skip OOB N-columns when N % tile_N != 0. Without this,
                 # OOB lanes feed `tRS_rD = 0` (GEMM accumulator default)
@@ -163,13 +171,19 @@ class LSE(Epilogue):
                 col_idx = coord[i][1]
                 col_idx_offset = col_idx + n_offset_tile
 
-                if col_idx_offset < params.vocab_size:
-                    rMaxVec[i], rSSEVec[i] = reduction_utils.online_softmax_combine_singleton(
-                        m0=rMaxVec[i],
-                        m1=tRS_rD[i],
-                        s0=rSSEVec[i],
-                        s1=misc_utils.get_dtype(rSSEVec)(1),
-                    )
+                if cutlass.const_expr(is_full_tile) or col_idx_offset < params.vocab_size:
+                    rMaxVec[i] = cute.arch.fmax(rMaxVec[i], tRS_rD[i])
+
+            for j in cutlass.range_constexpr(cute.size(rSSE_flt)):
+                rSSE_flt[j] = rSSE_flt[j] * cute.math.exp(rMax_old[j] - rMax_flt[j], fastmath=True)
+
+            for i in cutlass.range_constexpr(cute.size(rMaxVec)):
+                col_idx = coord[i][1]
+                col_idx_offset = col_idx + n_offset_tile
+
+                if cutlass.const_expr(is_full_tile) or col_idx_offset < params.vocab_size:
+                    rSSEVec[i] = rSSEVec[i] + cute.math.exp(tRS_rD[i] - rMaxVec[i], fastmath=True)
+
         return ()
 
 
