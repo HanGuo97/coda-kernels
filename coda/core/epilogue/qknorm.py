@@ -3,10 +3,10 @@ import operator
 import cutlass
 import cutlass.cute as cute
 
+from quack import layout_utils
+from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import ParamsBase
 from quack.varlen_utils import VarlenManager
-from quack.gemm_sm90 import GemmSm90
-from quack import layout_utils
 from quack.epi_ops import (
     EpiOp,
     EpiContext,
@@ -14,8 +14,9 @@ from quack.epi_ops import (
     colvec_reduce_accumulate,
     _get_lane_warp_layouts,
 )
-from coda.core.epilogue.base import Epilogue, Const
+
 from coda.core.ops import misc_utils
+from coda.core.epilogue.base import Epilogue, Const
 
 
 class SqSumReduce(VecReduce):
@@ -58,13 +59,14 @@ class SqSumReduce(VecReduce):
         m_idx, n_idx, _, batch_idx = tile_coord_mnkl
         tile_M, tile_N = gemm.cta_tile_shape_mnk[:2]
         epi_tile_N = tile_N // epi_tile_shape[1]
-        # head boundaries must land on segment ends so a head is never split mid-segment
+        # head boundaries must land on epi-tile ends so a head is never split mid-epi-tile
         misc_utils.static_assert(gemm.head_dim % epi_tile_N == 0)
         n_offset_tile = n_idx * tile_N
-        n_offset_epi_tile = n_offset_tile + cutlass.const_expr(epi_coord[1] * epi_tile_N)
-        n_idx_offset = n_offset_epi_tile + epi_tile_N
+        n_offset_epi_tile = cutlass.const_expr(epi_coord[1] * epi_tile_N)
+        epi_tile_start = n_offset_tile + n_offset_epi_tile
+        epi_tile_end = epi_tile_start + epi_tile_N
 
-        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1) or n_idx_offset % gemm.head_dim == 0:
+        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1) or epi_tile_end % gemm.head_dim == 0:
             tDrSSq, tDcD, _ = state
             rSSq_cur = tDrSSq[None, None, None, epi_coord[0], epi_coord[1]]
             tDcD_cur = tDcD[None, None, None, epi_coord[0], epi_coord[1]]
@@ -73,7 +75,6 @@ class SqSumReduce(VecReduce):
 
             # ── Derive lane layout from tiled_copy ──
             lane_layout_MN, warp_layout_MN = _get_lane_warp_layouts(tiled_copy, reference_src)
-            # For ColVecReduce: reduce across N lanes (lanes_in_N threads share same M row)
             lanes_in_N = cutlass.const_expr(cute.size(lane_layout_MN, mode=[1]))
             warps_in_N = cutlass.const_expr(cute.size(warp_layout_MN, mode=[1]))
             is_lane_n_leader = cute.arch.lane_idx() % lanes_in_N == 0
@@ -100,23 +101,26 @@ class SqSumReduce(VecReduce):
             rSSq_m = layout_utils.convert_layout_zero_stride(rSSq_cur, rSSq_cur.layout)[None, 0]
             tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, rSSq_cur.layout)[None, 0]
 
-            head_idx = n_offset_epi_tile // gemm.head_dim
-            segment_idx = n_idx - (head_idx * gemm.head_dim) // tile_N
-            segment_coord = head_idx * gemm.num_segments + segment_idx
-
             # Write to gmem
+            head_idx = epi_tile_start // gemm.head_dim
+            segment_idx = (
+                # segment offset
+                head_idx * gemm.num_segments +
+                # segment index of the epi-tile
+                n_idx - (head_idx * gemm.head_dim) // tile_N
+            )
             limit_m = min(varlen_manager.len_m(batch_idx) - m_idx * tile_M, tile_M)
-            limit_n_tiles = param.shape[2] if not varlen_manager.varlen_m else param.shape[1]
+            limit_segments = param.shape[2] if not varlen_manager.varlen_m else param.shape[1]
             if cutlass.const_expr(not varlen_manager.varlen_m):
-                mSSq = param[batch_idx, None, segment_coord]
+                mSSq = param[batch_idx, None, segment_idx]
             else:
                 mSSq = cute.domain_offset(
                     (varlen_manager.params.cu_seqlens_m[batch_idx],),
-                    param[None, segment_coord],
+                    param[None, segment_idx],
                 )
             gSSq = cute.local_tile(mSSq, (tile_M,), (m_idx,))
             should_write_gmem = is_lane_n_leader
-            if segment_coord < limit_n_tiles and should_write_gmem:
+            if segment_idx < limit_segments and should_write_gmem:
                 for m in cutlass.range_constexpr(cute.size(tDcD_m, mode=[0])):
                     row_idx = tDcD_m[m][0]
                     if row_idx < limit_m:
