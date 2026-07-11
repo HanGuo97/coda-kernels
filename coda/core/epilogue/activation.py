@@ -106,19 +106,19 @@ class Gated(Epilogue):
 
 class RoPE(Epilogue):
 
-    def __init__(self, pos_idx_name: str | None = None, inv_freq_name: str | None = None) -> None:
+    def __init__(self, pos_idx_name: str | None = None, freq_name: str | None = None) -> None:
         if pos_idx_name is not None:
             self.pos_idx_name = pos_idx_name
         else:
             self.pos_idx_name = "pos_idx"
 
-        if inv_freq_name is not None:
-            self.inv_freq_name = inv_freq_name
+        if freq_name is not None:
+            self.freq_name = freq_name
         else:
-            self.inv_freq_name = "inv_freq"
+            self.freq_name = "freq"
 
     def declares(self) -> tuple[EpiOp, ...]:
-        return (ColVecLoad(self.pos_idx_name), RowVecLoad(self.inv_freq_name))
+        return (ColVecLoad(self.pos_idx_name), RowVecLoad(self.freq_name))
 
     @cute.jit
     def visit(
@@ -130,10 +130,10 @@ class RoPE(Epilogue):
         tRS_rC: cute.Tensor | None,
     ) -> tuple[cute.Tensor, ...]:
         pos_idx = epi_loop_tensors.get(self.pos_idx_name)
-        inv_freq = epi_loop_tensors.get(self.inv_freq_name)
-        if cutlass.const_expr(pos_idx is not None and inv_freq is not None):
+        freq = epi_loop_tensors.get(self.freq_name)
+        if cutlass.const_expr(pos_idx is not None and freq is not None):
             for i in cutlass.range_constexpr(cute.size(tRS_rD) // 2):
-                a = pos_idx[2 * i].to(dtype=gemm.acc_dtype) * inv_freq[2 * i].to(dtype=gemm.acc_dtype)
+                a = pos_idx[2 * i].to(dtype=gemm.acc_dtype) * freq[2 * i].to(dtype=gemm.acc_dtype)
                 c = cute.math.cos(a, fastmath=True)
                 s = cute.math.sin(a, fastmath=True)
                 x = tRS_rD[2 * i]
