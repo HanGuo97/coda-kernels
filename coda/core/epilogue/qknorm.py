@@ -2,15 +2,20 @@ import math
 import operator
 import cutlass
 import cutlass.cute as cute
+from typing import NamedTuple
 
 from quack import layout_utils
 from quack.gemm_sm90 import GemmSm90
-from quack.cute_dsl_utils import ParamsBase
 from quack.varlen_utils import VarlenManager
+from quack.cute_dsl_utils import (
+    ParamsBase,
+    mlir_namedtuple,
+)
 from quack.epi_ops import (
     EpiOp,
     EpiContext,
     VecReduce,
+    assume_stride_divisibility,
     colvec_reduce_accumulate,
     _get_lane_warp_layouts,
 )
@@ -19,10 +24,29 @@ from coda.core.ops import misc_utils
 from coda.core.epilogue.base import Epilogue, Const
 
 
+@mlir_namedtuple
+class SqSumReduceParam(NamedTuple):
+    mSSq: cute.Tensor
+    head_dim: cutlass.Constexpr[int]
+    num_segments: cutlass.Constexpr[int]
+
+
 class SqSumReduce(VecReduce):
 
     dim = 0
     epi_m_major_preference = -1
+
+    def param_fields(self) -> list:
+        return [(self.name, SqSumReduceParam, None)]
+
+    def to_params(self, gemm: GemmSm90, args: tuple) -> dict:
+        return {
+            self.name: SqSumReduceParam(
+                mSSq=assume_stride_divisibility(getattr(args, self.name)),
+                head_dim=args.head_dim,
+                num_segments=args.num_segments,
+            )
+        }
 
     @cute.jit
     def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> tuple:
@@ -45,7 +69,7 @@ class SqSumReduce(VecReduce):
     def end_loop(
         self,
         gemm: GemmSm90,
-        param: cute.Tensor,
+        param: SqSumReduceParam,
         state: tuple,
         epi_coord: cute.Coord,
         epi_tile: cute.Tile,
@@ -60,13 +84,13 @@ class SqSumReduce(VecReduce):
         tile_M, tile_N = gemm.cta_tile_shape_mnk[:2]
         epi_tile_N = tile_N // epi_tile_shape[1]
         # head boundaries must land on epi-tile ends so a head is never split mid-epi-tile
-        misc_utils.static_assert(gemm.head_dim % epi_tile_N == 0)
+        misc_utils.static_assert(param.head_dim % epi_tile_N == 0)
         n_offset_tile = n_idx * tile_N
         n_offset_epi_tile = cutlass.const_expr(epi_coord[1] * epi_tile_N)
         epi_tile_start = n_offset_tile + n_offset_epi_tile
         epi_tile_end = epi_tile_start + epi_tile_N
 
-        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1) or epi_tile_end % gemm.head_dim == 0:
+        if cutlass.const_expr(epi_coord[1] == epi_tile_shape[1] - 1) or epi_tile_end % param.head_dim == 0:
             tDrSSq, tDcD, _ = state
             rSSq_cur = tDrSSq[None, None, None, epi_coord[0], epi_coord[1]]
             tDcD_cur = tDcD[None, None, None, epi_coord[0], epi_coord[1]]
@@ -102,21 +126,21 @@ class SqSumReduce(VecReduce):
             tDcD_m = layout_utils.convert_layout_zero_stride(tDcD_cur, rSSq_cur.layout)[None, 0]
 
             # Write to gmem
-            head_idx = epi_tile_start // gemm.head_dim
+            head_idx = epi_tile_start // param.head_dim
             segment_idx = (
                 # segment offset
-                head_idx * gemm.num_segments +
+                head_idx * param.num_segments +
                 # segment index of the epi-tile
-                n_idx - (head_idx * gemm.head_dim) // tile_N
+                n_idx - (head_idx * param.head_dim) // tile_N
             )
             limit_m = min(varlen_manager.len_m(batch_idx) - m_idx * tile_M, tile_M)
-            limit_segments = param.shape[2] if not varlen_manager.varlen_m else param.shape[1]
+            limit_segments = param.mSSq.shape[2] if not varlen_manager.varlen_m else param.mSSq.shape[1]
             if cutlass.const_expr(not varlen_manager.varlen_m):
-                mSSq = param[batch_idx, None, segment_idx]
+                mSSq = param.mSSq[batch_idx, None, segment_idx]
             else:
                 mSSq = cute.domain_offset(
                     (varlen_manager.params.cu_seqlens_m[batch_idx],),
-                    param[None, segment_idx],
+                    param.mSSq[None, segment_idx],
                 )
             gSSq = cute.local_tile(mSSq, (tile_M,), (m_idx,))
             should_write_gmem = is_lane_n_leader
