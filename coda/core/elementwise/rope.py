@@ -301,7 +301,7 @@ def _qknorm_rope_bwd(
     vector_size = cutlass.const_expr(_NUM_BITS // mX_packed.element_type.width)
     misc_utils.static_assert(len(mDX_packed.shape) == 2)
     misc_utils.static_assert(len(mDY_packed.shape) == 2)
-    misc_utils.static_assert(len(mDGamma.shape) == 1)
+    misc_utils.static_assert(len(mDGamma.shape) == 2)
     misc_utils.static_assert(len(mX_packed.shape) == 2)
     misc_utils.static_assert(len(mSSq.shape) == 2)
     misc_utils.static_assert(len(mGamma.shape) == 1)
@@ -384,10 +384,10 @@ def _compile_qknorm_rope_bwd(
         assumed_align=16,
     )
     mDGamma = cute.runtime.make_fake_tensor(
-        dtype=dtype,
-        shape=(size,),
-        stride=(1,),
-        assumed_align=dtype.width // 8,
+        dtype=cute.Float32,
+        shape=(cute.sym_int(), size),
+        stride=(cute.sym_int64(divisibility=1), 1),
+        assumed_align=4,
     )
     mX = cute.runtime.make_fake_tensor(
         dtype=dtype,
