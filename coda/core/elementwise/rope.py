@@ -6,6 +6,7 @@ import cuda.bindings.driver as cuda
 from typing import Callable
 
 from quack.cache import jit_cache
+from quack.cute_dsl_utils import torch2cute_dtype_map
 from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
@@ -69,24 +70,25 @@ def qknorm_rope_kernel(
 
     for row_index in cutlass.range_constexpr(val_m):
         row_coord, col_coord_begin = tXcX_packed[row_index * vector_size]
-        head_idx = (2 * col_coord_begin) // head_dim
-        rms = cute.Float32(1.0)
-        if head_idx < num_heads:
-            ssq = cute.Float32.zero
-            for i in cutlass.range_constexpr(num_segments):
-                ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
-            rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
+        if row_coord < mX_packed.shape[0]:
+            head_idx = (2 * col_coord_begin) // head_dim
+            rms = cute.Float32(1.0)
+            if head_idx < num_heads:
+                ssq = cute.Float32.zero
+                for i in cutlass.range_constexpr(num_segments):
+                    ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
+                rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
 
-        for col_index in cutlass.range_constexpr(vector_size):
-            flat_index = row_index * vector_size + col_index
-            _, col_coord = tXcX_packed[flat_index]
-            a = mPos[row_coord].to(dtype=cute.Float32) * mFreq[col_coord].to(dtype=cute.Float32)
-            c = cute.math.cos(a, fastmath=True)
-            s = cute.math.sin(a, fastmath=True)
-            x = tXrX[2 * flat_index    ].to(dtype=cute.Float32) * mGamma[2 * col_coord    ].to(dtype=cute.Float32) * rms
-            y = tXrX[2 * flat_index + 1].to(dtype=cute.Float32) * mGamma[2 * col_coord + 1].to(dtype=cute.Float32) * rms
-            tXrY[2 * flat_index] = (x * c + y * s).to(dtype=tXrY.element_type)
-            tXrY[2 * flat_index + 1] = (y * c - x * s).to(dtype=tXrY.element_type)
+            for col_index in cutlass.range_constexpr(vector_size):
+                flat_index = row_index * vector_size + col_index
+                _, col_coord = tXcX_packed[flat_index]
+                a = mPos[row_coord].to(dtype=cute.Float32) * mFreq[col_coord].to(dtype=cute.Float32)
+                c = cute.math.cos(a, fastmath=True)
+                s = cute.math.sin(a, fastmath=True)
+                x = tXrX[2 * flat_index].to(dtype=cute.Float32) * mGamma[2 * col_coord].to(dtype=cute.Float32) * rms
+                y = tXrX[2 * flat_index + 1].to(dtype=cute.Float32) * mGamma[2 * col_coord + 1].to(dtype=cute.Float32) * rms
+                tXrY[2 * flat_index] = (x * c + y * s).to(dtype=tXrY.element_type)
+                tXrY[2 * flat_index + 1] = (y * c - x * s).to(dtype=tXrY.element_type)
 
     _ = memory_utils.copy(
         src=tXrY_packed,
@@ -182,8 +184,9 @@ def _compile_qknorm_rope(
     thr_n: int,
     val_m: int,
 ) -> Callable:
-    m = cute.sym_int(divisibility=thr_m * val_m)
+    m = cute.sym_int()
     vector_size = cutlass.const_expr(_NUM_BITS // dtype.width)
+    misc_utils.static_assert(size % head_dim == 0)
     misc_utils.static_assert(vector_size % 2 == 0)
     mX = cute.runtime.make_fake_tensor(
         dtype=dtype,
@@ -207,19 +210,19 @@ def _compile_qknorm_rope(
         dtype=dtype,
         shape=(size,),
         stride=(1,),
-        assumed_align=4,
+        assumed_align=dtype.width // 8,
     )
     mPos = cute.runtime.make_fake_tensor(
         dtype=pos_dtype,
         shape=(m,),
         stride=(1,),
-        assumed_align=4,
+        assumed_align=pos_dtype.width // 8,
     )
     mFreq = cute.runtime.make_fake_tensor(
         dtype=freq_dtype,
         shape=(size // 2,),
         stride=(1,),
-        assumed_align=4,
+        assumed_align=freq_dtype.width // 8,
     )
     stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     return cute.compile(
@@ -263,6 +266,9 @@ def qknorm_rope_(
         num_heads=num_heads,
         num_segments=num_segments,
         eps=eps,
+        dtype=torch2cute_dtype_map[x.dtype],
+        pos_dtype=torch2cute_dtype_map[pos.dtype],
+        freq_dtype=torch2cute_dtype_map[freq.dtype],
         thr_m=thr_m,
         thr_n=thr_n,
         val_m=val_m,
