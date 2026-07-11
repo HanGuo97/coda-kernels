@@ -32,7 +32,10 @@ def cross_entropy_fwd_bwd_kernel(
     idLogits = cute.make_identity_tensor(mLogits.shape)
     gLogits = cute.local_tile(mLogits, tiler_mn, (bidx, bidy))
     cLogits = cute.local_tile(idLogits, tiler_mn, (bidx, bidy))
+
+    is_full_tile = cutlass.const_expr(mLogits.shape[1] % tiler_mn[1] == 0)
     misc_utils.static_assert(vector_size == _NUM_BITS // mLogits.element_type.width)
+
     config = memory_utils.MemoryCopyConfig(
         op="universal",
         dtype=mLogits.element_type,
@@ -61,19 +64,21 @@ def cross_entropy_fwd_bwd_kernel(
         for col_index in cutlass.range_constexpr(vector_size):
             flat_index = row_index * vector_size + col_index
             _, col_coord = tXcLogits[flat_index]
-            logits = tXrLogits[flat_index].to(dtype=cute.Float32)
-            probs = cute.math.exp(logits - lse, fastmath=True)
-            dlogits = probs
 
-            if col_coord == target:
-                dlogits = probs - 1.0
-                if not ignored:
-                    mLoss[row_coord] = lse - logits
+            if cutlass.const_expr(is_full_tile) or col_coord < mLogits.shape[1]:
+                logits = tXrLogits[flat_index].to(dtype=cute.Float32)
+                probs = cute.math.exp(logits - lse, fastmath=True)
+                dlogits = probs
 
-            if ignored:
-                dlogits = cute.Float32.zero
+                if col_coord == target:
+                    dlogits = probs - 1.0
+                    if not ignored:
+                        mLoss[row_coord] = lse - logits
 
-            tXrLogits[flat_index] = dlogits.to(dtype=tXrLogits.element_type)
+                if ignored:
+                    dlogits = cute.Float32.zero
+
+                tXrLogits[flat_index] = dlogits.to(dtype=tXrLogits.element_type)
 
     _ = memory_utils.copy(
         src=tXrLogits,
@@ -104,7 +109,6 @@ def _cross_entropy_fwd_bwd(
     misc_utils.static_assert(len(mTarget.shape) == 1)
     misc_utils.static_assert(len(mLoss.shape) == 1)
     misc_utils.static_assert(mLogits.shape[1] % vector_size == 0)
-    misc_utils.static_assert(mLogits.shape[1] % (thr_n * vector_size) == 0)
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
         thread_order="row",
