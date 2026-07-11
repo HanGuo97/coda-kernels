@@ -82,11 +82,12 @@ def qknorm_rope_kernel(
             for col_index in cutlass.range_constexpr(vector_size):
                 flat_index = row_index * vector_size + col_index
                 _, col_coord = tXcX_packed[flat_index]
+                col_coord_head = (2 * col_coord) % head_dim
                 a = mPos[row_coord].to(dtype=cute.Float32) * mFreq[col_coord].to(dtype=cute.Float32)
                 c = cute.math.cos(a, fastmath=True)
                 s = cute.math.sin(a, fastmath=True)
-                x = tXrX[2 * flat_index].to(dtype=cute.Float32) * mGamma[2 * col_coord].to(dtype=cute.Float32) * rms
-                y = tXrX[2 * flat_index + 1].to(dtype=cute.Float32) * mGamma[2 * col_coord + 1].to(dtype=cute.Float32) * rms
+                x = tXrX[2 * flat_index].to(dtype=cute.Float32) * mGamma[col_coord_head].to(dtype=cute.Float32) * rms
+                y = tXrX[2 * flat_index + 1].to(dtype=cute.Float32) * mGamma[col_coord_head + 1].to(dtype=cute.Float32) * rms
                 tXrY[2 * flat_index] = (x * c + y * s).to(dtype=tXrY.element_type)
                 tXrY[2 * flat_index + 1] = (y * c - x * s).to(dtype=tXrY.element_type)
 
@@ -208,7 +209,7 @@ def _compile_qknorm_rope(
     )
     mGamma = cute.runtime.make_fake_tensor(
         dtype=dtype,
-        shape=(size,),
+        shape=(head_dim,),
         stride=(1,),
         assumed_align=dtype.width // 8,
     )
@@ -403,7 +404,7 @@ def _compile_qknorm_rope_bwd(
     )
     mGamma = cute.runtime.make_fake_tensor(
         dtype=dtype,
-        shape=(size,),
+        shape=(head_dim,),
         stride=(1,),
         assumed_align=dtype.width // 8,
     )
