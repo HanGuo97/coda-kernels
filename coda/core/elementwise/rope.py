@@ -274,3 +274,75 @@ def qknorm_rope_(
         val_m=val_m,
     )
     fn(x, y, ssq, gamma, pos, freq)
+
+
+@cute.jit
+def _qknorm_rope_bwd(
+    mDY: cute.Tensor,
+    mDX: cute.Tensor,
+    mDGamma: cute.Tensor,
+    mX: cute.Tensor,
+    mSSq: cute.Tensor,
+    mGamma: cute.Tensor,
+    mPos: cute.Tensor,
+    mFreq: cute.Tensor,
+    head_dim: cutlass.Constexpr[int],
+    num_heads: cutlass.Constexpr[int],
+    num_segments: cutlass.Constexpr[int],
+    eps: cutlass.Constexpr[float],
+    thr_m: cutlass.Constexpr[int],
+    thr_n: cutlass.Constexpr[int],
+    val_m: cutlass.Constexpr[int],
+    stream: cuda.CUstream,
+) -> int:
+    mDY_packed = cute.recast_tensor(mDY, dtype=cute.Int32)
+    mDX_packed = cute.recast_tensor(mDX, dtype=cute.Int32)
+    mX_packed = cute.recast_tensor(mX, dtype=cute.Int32)
+    vector_size = cutlass.const_expr(_NUM_BITS // mX_packed.element_type.width)
+    misc_utils.static_assert(len(mDY_packed.shape) == 2)
+    misc_utils.static_assert(len(mDX_packed.shape) == 2)
+    misc_utils.static_assert(len(mDGamma.shape) == 1)
+    misc_utils.static_assert(len(mX_packed.shape) == 2)
+    misc_utils.static_assert(len(mSSq.shape) == 2)
+    misc_utils.static_assert(len(mGamma.shape) == 1)
+    misc_utils.static_assert(len(mPos.shape) == 1)
+    misc_utils.static_assert(len(mFreq.shape) == 1)
+    tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
+        thread_shape=(thr_m, thr_n),
+        thread_order="row",
+        value_shape=(val_m, vector_size),
+        value_order="row",
+    )
+
+    # ((TileM, TileN), (RestM, RestN))
+    gDY_packed = cute.zipped_divide(mDY_packed, tiler_mn)
+    num_blocks = gDY_packed.shape[1]
+    num_threads = cute.size(tv_layout, mode=[0])
+    misc_utils.static_assert(len(num_blocks) == 2)
+    kernel = qknorm_rope_bwd_kernel(
+        mDY_packed=mDY_packed,
+        mDX_packed=mDX_packed,
+        mDGamma=mDGamma,
+        mX_packed=mX_packed,
+        mSSq=mSSq,
+        mGamma=mGamma,
+        mPos=mPos,
+        mFreq=mFreq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+        dtype=mDY.element_type,
+        tiler_mn=tiler_mn,
+        tv_layout=tv_layout,
+        val_m=val_m,
+        vector_size=vector_size,
+    )
+    kernel.launch(
+        grid=[*num_blocks, 1],
+        block=[num_threads, 1, 1],
+        cluster=None,
+        smem=None,
+        stream=stream,
+    )
+    return kernel.smem_usage()
