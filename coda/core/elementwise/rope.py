@@ -362,12 +362,6 @@ def qknorm_rope_bwd_kernel(
         dtype=cute.Float32,
         memspace="rmem",
     )
-    rX = creation_utils.allocate_tensor_from_shape(
-        shape=(2 * vector_size,),
-        order="row",
-        dtype=cute.Float32,
-        memspace="rmem",
-    )
     rDGamma = creation_utils.allocate_tensor_from_shape(
         shape=(2 * vector_size,),
         order="row",
@@ -404,8 +398,6 @@ def qknorm_rope_bwd_kernel(
                 g1 = mGamma[col_coord_head + 1].to(dtype=cute.Float32)
                 rDZ[2 * col_index] = dz0
                 rDZ[2 * col_index + 1] = dz1
-                rX[2 * col_index] = x0
-                rX[2 * col_index + 1] = x1
                 drms = drms + dz0 * g0 * x0 + dz1 * g1 * x1
 
             if cutlass.const_expr(lanes_per_head > 1):
@@ -425,17 +417,17 @@ def qknorm_rope_bwd_kernel(
                 g1 = mGamma[col_coord_head + 1].to(dtype=cute.Float32)
                 dz0 = rDZ[2 * col_index]
                 dz1 = rDZ[2 * col_index + 1]
-                x0 = rX[2 * col_index]
-                x1 = rX[2 * col_index + 1]
+                x0 = tXrX[2 * flat_index].to(dtype=cute.Float32)
+                x1 = tXrX[2 * flat_index + 1].to(dtype=cute.Float32)
                 tXrDX[2 * flat_index] = (rms * g0 * dz0 + x0 * dssq2).to(dtype=tXrDX.element_type)
                 tXrDX[2 * flat_index + 1] = (rms * g1 * dz1 + x1 * dssq2).to(dtype=tXrDX.element_type)
                 rDGamma[2 * col_index] = rDGamma[2 * col_index] + dz0 * x0 * rms
                 rDGamma[2 * col_index + 1] = rDGamma[2 * col_index + 1] + dz1 * x1 * rms
 
     thr_row = tidx // thr_n
+    col_coord_packed_offset = bidy * tile_N_packed
     for col_index in cutlass.range_constexpr(vector_size):
         _, col_coord_packed = tXcX_packed[col_index]
-        col_coord_packed_offset = bidy * tile_N_packed
         col_coord_local = 2 * (col_coord_packed - col_coord_packed_offset)
         sDGamma[thr_row, col_coord_local] = rDGamma[2 * col_index]
         sDGamma[thr_row, col_coord_local + 1] = rDGamma[2 * col_index + 1]
@@ -451,7 +443,7 @@ def qknorm_rope_bwd_kernel(
     )
 
     cute.arch.barrier()
-    for i in cutlass.range_constexpr((2 * tile_N_packed + num_threads - 1) // num_threads):
+    for i in cutlass.range_constexpr(misc_utils.ceil_div(2 * tile_N_packed, num_threads)):
         j = i * num_threads + tidx
         if j < 2 * tile_N_packed:
             dg = cute.Float32.zero
@@ -500,7 +492,7 @@ def _qknorm_rope_bwd(
     misc_utils.static_assert((head_dim % (2 * vector_size)) == 0)
     misc_utils.static_assert(lanes_per_head <= 32)
     misc_utils.static_assert((thr_n % lanes_per_head) == 0)
-    misc_utils.static_assert((lanes_per_head & (lanes_per_head - 1)) == 0)
+    misc_utils.static_assert(misc_utils.is_power_of_2(lanes_per_head))
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
         thread_order="row",
