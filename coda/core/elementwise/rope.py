@@ -277,6 +277,153 @@ def qknorm_rope_(
     fn(x, y, ssq, gamma, pos, freq)
 
 
+@cute.kernel
+def qknorm_rope_bwd_kernel(
+    mDX_packed: cute.Tensor,
+    mDY_packed: cute.Tensor,
+    mDGamma: cute.Tensor,
+    mX_packed: cute.Tensor,
+    mSSq: cute.Tensor,
+    mGamma: cute.Tensor,
+    mPos: cute.Tensor,
+    mFreq: cute.Tensor,
+    head_dim: cutlass.Constexpr[int],
+    num_heads: cutlass.Constexpr[int],
+    num_segments: cutlass.Constexpr[int],
+    eps: cutlass.Constexpr[float],
+    dtype: type[cute.Numeric],
+    tiler_mn: cute.Shape,
+    tv_layout: cute.Layout,
+    thr_m: cutlass.Constexpr[int],
+    val_m: cutlass.Constexpr[int],
+    vector_size: cutlass.Constexpr[int],
+) -> None:
+    tidx, _, _ = cute.arch.thread_idx()
+    bidx, bidy, _ = cute.arch.block_idx()
+    allocator = cutlass.utils.SmemAllocator()
+    sDGamma = creation_utils.allocate_tensor_from_shape(
+        shape=(thr_m, 2 * tiler_mn[1]),
+        order="row",
+        dtype=cute.Float32,
+        memspace="smem",
+        smem_allocator=allocator,
+        byte_alignment=4,
+    )
+
+    idX_packed = cute.make_identity_tensor(mX_packed.shape)
+    gDX_packed = cute.local_tile(mDX_packed, tiler_mn, (bidx, bidy))
+    gDY_packed = cute.local_tile(mDY_packed, tiler_mn, (bidx, bidy))
+    gX_packed = cute.local_tile(mX_packed, tiler_mn, (bidx, bidy))
+    cX_packed = cute.local_tile(idX_packed, tiler_mn, (bidx, bidy))
+    config = memory_utils.MemoryCopyConfig(
+        op="universal",
+        dtype=mX_packed.element_type,
+        num_bits_per_copy=mX_packed.element_type.width * vector_size,
+        tiler_mn=tiler_mn,
+        layout_tv=tv_layout,
+    )
+    copy_outputs_DY = memory_utils.copy(
+        src=gDY_packed,
+        dst="rmem",
+        crd=cX_packed,
+        shape=mDY_packed.shape,
+        config=config,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    )
+    copy_outputs_X = memory_utils.copy(
+        src=gX_packed,
+        dst="rmem",
+        crd=cX_packed,
+        shape=mX_packed.shape,
+        config=config,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    )
+    tXrDY_packed = copy_outputs_DY.dst_thread
+    tXrX_packed = copy_outputs_X.dst_thread
+    tXcX_packed = copy_outputs_X.crd_thread
+    tXrDX_packed = creation_utils.allocate_tensor_like(
+        tensor=tXrX_packed,
+        memspace="rmem",
+        smem_allocator=allocator,
+        dtype=mDX_packed.element_type,
+    )
+    tXrDY = cute.recast_tensor(tXrDY_packed, dtype=dtype)
+    tXrDX = cute.recast_tensor(tXrDX_packed, dtype=dtype)
+    tXrX = cute.recast_tensor(tXrX_packed, dtype=dtype)
+    rDZ = creation_utils.allocate_tensor_from_shape(
+        shape=(2 * vector_size,),
+        order="row",
+        dtype=cute.Float32,
+        memspace="rmem",
+    )
+    rX = creation_utils.allocate_tensor_from_shape(
+        shape=(2 * vector_size,),
+        order="row",
+        dtype=cute.Float32,
+        memspace="rmem",
+    )
+    rDGamma = creation_utils.allocate_tensor_from_shape(
+        shape=(2 * vector_size,),
+        order="row",
+        dtype=cute.Float32,
+        memspace="rmem",
+    )
+    cute.filter_zeros(rDGamma).fill(0.0)
+    lanes_per_head = cutlass.const_expr(head_dim // (2 * vector_size))
+
+    for row_index in cutlass.range_constexpr(val_m):
+        row_coord, col_coord_begin = tXcX_packed[row_index * vector_size]
+        if row_coord < mX_packed.shape[0]:
+            head_idx = (2 * col_coord_begin) // head_dim
+            rms = cute.Float32(1.0)
+            if head_idx < num_heads:
+                ssq = cute.Float32.zero
+                for i in cutlass.range_constexpr(num_segments):
+                    ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
+                rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
+
+            drms = cute.Float32.zero
+            for col_index in cutlass.range_constexpr(vector_size):
+                flat_index = row_index * vector_size + col_index
+                _, col_coord = tXcX_packed[flat_index]
+                col_coord_head = (2 * col_coord) % head_dim
+                a = mPos[row_coord].to(dtype=cute.Float32) * mFreq[col_coord].to(dtype=cute.Float32)
+                c = cute.math.cos(a, fastmath=True)
+                s = cute.math.sin(a, fastmath=True)
+                dy0 = tXrDY[2 * flat_index].to(dtype=cute.Float32)
+                dy1 = tXrDY[2 * flat_index + 1].to(dtype=cute.Float32)
+                dz0 = dy0 * c - dy1 * s
+                dz1 = dy1 * c + dy0 * s
+                x0 = tXrX[2 * flat_index].to(dtype=cute.Float32)
+                x1 = tXrX[2 * flat_index + 1].to(dtype=cute.Float32)
+                g0 = mGamma[col_coord_head].to(dtype=cute.Float32)
+                g1 = mGamma[col_coord_head + 1].to(dtype=cute.Float32)
+                rDZ[2 * col_index] = dz0
+                rDZ[2 * col_index + 1] = dz1
+                rX[2 * col_index] = x0
+                rX[2 * col_index + 1] = x1
+                drms = drms + dz0 * g0 * x0 + dz1 * g1 * x1
+
+            if cutlass.const_expr(lanes_per_head > 1):
+                drms = cute.arch.warp_reduction(
+                    drms,
+                    op=operator.add,
+                    threads_in_group=lanes_per_head,
+                )
+
+    _ = memory_utils.copy(
+        src=tXrDX_packed,
+        dst=gDX_packed,
+        crd=tXcX_packed,
+        shape=mDX_packed.shape,
+        config=config,
+        thread_index=tidx,
+        smem_allocator=allocator,
+    )
+
+
 @cute.jit
 def _qknorm_rope_bwd(
     mDX: cute.Tensor,
