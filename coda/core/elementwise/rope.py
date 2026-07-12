@@ -303,6 +303,7 @@ def qknorm_rope_bwd_kernel(
     allocator = cutlass.utils.SmemAllocator()
 
     tile_N_packed = cutlass.const_expr(tiler_mn[1])
+    num_threads = cutlass.const_expr(cute.size(tv_layout, mode=[0]))
     sDGamma = creation_utils.allocate_tensor_from_shape(
         shape=(thr_m, 2 * tile_N_packed),
         order="row",
@@ -414,6 +415,31 @@ def qknorm_rope_bwd_kernel(
                     threads_in_group=lanes_per_head,
                 )
 
+            # dssq2 = 2 * dL/dssq
+            dssq2 = -drms * rms * rms * rms / head_dim
+            for col_index in cutlass.range_constexpr(vector_size):
+                flat_index = row_index * vector_size + col_index
+                _, col_coord = tXcX_packed[flat_index]
+                col_coord_head = (2 * col_coord) % head_dim
+                g0 = mGamma[col_coord_head].to(dtype=cute.Float32)
+                g1 = mGamma[col_coord_head + 1].to(dtype=cute.Float32)
+                dz0 = rDZ[2 * col_index]
+                dz1 = rDZ[2 * col_index + 1]
+                x0 = rX[2 * col_index]
+                x1 = rX[2 * col_index + 1]
+                tXrDX[2 * flat_index] = (rms * g0 * dz0 + x0 * dssq2).to(dtype=tXrDX.element_type)
+                tXrDX[2 * flat_index + 1] = (rms * g1 * dz1 + x1 * dssq2).to(dtype=tXrDX.element_type)
+                rDGamma[2 * col_index] = rDGamma[2 * col_index] + dz0 * x0 * rms
+                rDGamma[2 * col_index + 1] = rDGamma[2 * col_index + 1] + dz1 * x1 * rms
+
+    thr_row = tidx // thr_n
+    for col_index in cutlass.range_constexpr(vector_size):
+        _, col_coord_packed = tXcX_packed[col_index]
+        col_coord_packed_offset = bidy * tile_N_packed
+        col_coord_local = 2 * (col_coord_packed - col_coord_packed_offset)
+        sDGamma[thr_row, col_coord_local] = rDGamma[2 * col_index]
+        sDGamma[thr_row, col_coord_local + 1] = rDGamma[2 * col_index + 1]
+
     _ = memory_utils.copy(
         src=tXrDX_packed,
         dst=gDX_packed,
@@ -423,6 +449,15 @@ def qknorm_rope_bwd_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     )
+
+    cute.arch.barrier()
+    for i in cutlass.range_constexpr((2 * tile_N_packed + num_threads - 1) // num_threads):
+        j = i * num_threads + tidx
+        if j < 2 * tile_N_packed:
+            dg = cute.Float32.zero
+            for row in cutlass.range_constexpr(thr_m):
+                dg = dg + sDGamma[row, j]
+            mDGamma[bidx, bidy * 2 * tile_N_packed + j] = dg
 
 
 @cute.jit
