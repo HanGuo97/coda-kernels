@@ -3,8 +3,19 @@ from quack.gemm_interface import gemm as quack_gemm
 from quack.autotuner import autotune, AutotuneConfig
 
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
-from coda.core.gemm.gemm_interface import _dispatch, _kernel_op
-from coda.core.gemm.registry import GemmSwiGLU
+from coda.core.gemm.gemm_interface import (
+    _dispatch,
+    _kernel_op,
+    _gemm_epilogue_tuned,
+    prune_gemm_configs,
+)
+from coda.core.gemm.registry import (
+    GemmLSE,
+    GemmRoPE,
+    GemmSwiGLU,
+    GemmQKVSqSum,
+    GemmLSESelectLogits,
+)
 
 
 @autotune(
@@ -69,6 +80,25 @@ def _gemm_swiglu(
     )
 
 
+@_kernel_op("coda::gemm_rope", mutates_args=("D",))
+def _gemm_rope(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+) -> None:
+    epi_args = {"mPos": pos, "mFreq": freq}
+    _dispatch(
+        GemmCls=GemmRoPE,
+        A=A,
+        B=B,
+        D=D,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmRoPE, epi_args),
+    )
+
+
 def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     _, N = B.shape
@@ -78,3 +108,29 @@ def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.T
     epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
     _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
     return pre_act, post_act
+
+
+def gemm_rope(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+) -> torch.Tensor:
+    M, _ = A.shape
+    _, N = B.shape
+    D = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmRoPE,
+        epi_args={
+            "mPos": pos,
+            "mFreq": freq,
+        },
+    )
+    _gemm_rope(
+        A=A,
+        B=B,
+        D=D,
+        pos=epi_args["mPos"],
+        freq=epi_args["mFreq"],
+    )
+    return D
