@@ -2,8 +2,9 @@ from quack.gemm_sm90 import GemmSm90
 from quack.activation import gate_fn_map
 
 from coda.core.epilogue.base import compose
-from coda.core.epilogue.activation import Gated
+from coda.core.epilogue.activation import Gated, RoPE
 from coda.core.epilogue.lse import LSE, SelectLogits
+from coda.core.epilogue.qknorm import SqSum
 
 
 GemmSwiGLU = (
@@ -12,6 +13,14 @@ GemmSwiGLU = (
     )
     .bind(
         name="GemmSwiGLU",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmRoPE = (
+    RoPE()
+    .bind(
+        name="GemmRoPE",
         gemm_cls=GemmSm90,
     )
 )
@@ -33,6 +42,14 @@ GemmLSESelectLogits = (
     )
     .bind(
         name="GemmLSESelectLogits",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmQKVSqSum = (
+    SqSum()
+    .bind(
+        name="GemmQKVSqSum",
         gemm_cls=GemmSm90,
     )
 )
