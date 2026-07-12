@@ -464,7 +464,7 @@ def _qknorm_rope_bwd(
     misc_utils.static_assert(mX_packed.shape[1] % (thr_n * vector_size) == 0)
     misc_utils.static_assert((head_dim % (2 * vector_size)) == 0)
     misc_utils.static_assert(lanes_per_head <= 32)
-    misc_utils.static_assert((lanes_per_head % thr_n) == 0)
+    misc_utils.static_assert((thr_n % lanes_per_head) == 0)
     misc_utils.static_assert((lanes_per_head & (lanes_per_head - 1)) == 0)
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
