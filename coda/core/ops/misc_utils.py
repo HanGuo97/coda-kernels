@@ -69,3 +69,11 @@ def greatest_power_of_2_dividing(n: int) -> int:
 def static_assert_is_Tensor(x: object) -> cute.Tensor:
     static_assert(isinstance(x, cute.Tensor))
     return cast(cute.Tensor, x)
+
+
+def ceil_div(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
+def is_power_of_2(n: int) -> bool:
+    return (n > 0) and ((n & (n - 1)) == 0)
