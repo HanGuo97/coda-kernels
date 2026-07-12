@@ -526,7 +526,7 @@ def _compile_qknorm_rope_bwd(
     m = cute.sym_int()
     vector_size = cutlass.const_expr(_NUM_BITS // dtype.width)
     misc_utils.static_assert(size == (head_dim * num_heads))
-    misc_utils.static_assert(vector_size % 2 == 0)
+    misc_utils.static_assert((vector_size % 2) == 0)
     mDX = cute.runtime.make_fake_tensor(
         dtype=dtype,
         shape=(m, size),
