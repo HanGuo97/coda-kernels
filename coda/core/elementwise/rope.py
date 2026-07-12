@@ -72,12 +72,10 @@ def qknorm_rope_kernel(
         row_coord, col_coord_begin = tXcX_packed[row_index * vector_size]
         if row_coord < mX_packed.shape[0]:
             head_idx = (2 * col_coord_begin) // head_dim
-            rms = cute.Float32(1.0)
-            if head_idx < num_heads:
-                ssq = cute.Float32.zero
-                for i in cutlass.range_constexpr(num_segments):
-                    ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
-                rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
+            ssq = cute.Float32.zero
+            for i in cutlass.range_constexpr(num_segments):
+                ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
+            rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
 
             for col_index in cutlass.range_constexpr(vector_size):
                 flat_index = row_index * vector_size + col_index
@@ -128,10 +126,11 @@ def _qknorm_rope(
     misc_utils.static_assert(len(mGamma.shape) == 1)
     misc_utils.static_assert(len(mPos.shape) == 1)
     misc_utils.static_assert(len(mFreq.shape) == 1)
-    misc_utils.static_assert(mX.shape[1] % head_dim == 0)
+    misc_utils.static_assert(mX.shape[1] == (head_dim * num_heads))
     misc_utils.static_assert(mX_packed.shape[1] == mY_packed.shape[1])
     misc_utils.static_assert(mX_packed.shape[1] % vector_size == 0)
     misc_utils.static_assert(mX_packed.shape[1] % (thr_n * vector_size) == 0)
+    misc_utils.static_assert((head_dim % (2 * vector_size)) == 0)
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
         thread_order="row",
@@ -187,8 +186,8 @@ def _compile_qknorm_rope(
 ) -> Callable:
     m = cute.sym_int()
     vector_size = cutlass.const_expr(_NUM_BITS // dtype.width)
-    misc_utils.static_assert(size % head_dim == 0)
-    misc_utils.static_assert(vector_size % 2 == 0)
+    misc_utils.static_assert(size == (head_dim * num_heads))
+    misc_utils.static_assert((vector_size % 2) == 0)
     mX = cute.runtime.make_fake_tensor(
         dtype=dtype,
         shape=(m, size),
@@ -295,14 +294,17 @@ def qknorm_rope_bwd_kernel(
     tiler_mn: cute.Shape,
     tv_layout: cute.Layout,
     thr_m: cutlass.Constexpr[int],
+    thr_n: cutlass.Constexpr[int],
     val_m: cutlass.Constexpr[int],
     vector_size: cutlass.Constexpr[int],
 ) -> None:
     tidx, _, _ = cute.arch.thread_idx()
     bidx, bidy, _ = cute.arch.block_idx()
     allocator = cutlass.utils.SmemAllocator()
+
+    tile_N_packed = cutlass.const_expr(tiler_mn[1])
     sDGamma = creation_utils.allocate_tensor_from_shape(
-        shape=(thr_m, 2 * tiler_mn[1]),
+        shape=(thr_m, 2 * tile_N_packed),
         order="row",
         dtype=cute.Float32,
         memspace="smem",
@@ -352,6 +354,7 @@ def qknorm_rope_bwd_kernel(
     tXrDY = cute.recast_tensor(tXrDY_packed, dtype=dtype)
     tXrDX = cute.recast_tensor(tXrDX_packed, dtype=dtype)
     tXrX = cute.recast_tensor(tXrX_packed, dtype=dtype)
+
     rDZ = creation_utils.allocate_tensor_from_shape(
         shape=(2 * vector_size,),
         order="row",
@@ -377,12 +380,10 @@ def qknorm_rope_bwd_kernel(
         row_coord, col_coord_begin = tXcX_packed[row_index * vector_size]
         if row_coord < mX_packed.shape[0]:
             head_idx = (2 * col_coord_begin) // head_dim
-            rms = cute.Float32(1.0)
-            if head_idx < num_heads:
-                ssq = cute.Float32.zero
-                for i in cutlass.range_constexpr(num_segments):
-                    ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
-                rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
+            ssq = cute.Float32.zero
+            for i in cutlass.range_constexpr(num_segments):
+                ssq = ssq + mSSq[row_coord, head_idx * num_segments + i]
+            rms = cute.math.rsqrt(ssq / head_dim + eps, fastmath=True)
 
             drms = cute.Float32.zero
             for col_index in cutlass.range_constexpr(vector_size):
@@ -447,6 +448,7 @@ def _qknorm_rope_bwd(
     mDY_packed = cute.recast_tensor(mDY, dtype=cute.Int32)
     mX_packed = cute.recast_tensor(mX, dtype=cute.Int32)
     vector_size = cutlass.const_expr(_NUM_BITS // mX_packed.element_type.width)
+    lanes_per_head = cutlass.const_expr(head_dim // (2 * vector_size))
     misc_utils.static_assert(len(mDX_packed.shape) == 2)
     misc_utils.static_assert(len(mDY_packed.shape) == 2)
     misc_utils.static_assert(len(mDGamma.shape) == 2)
@@ -455,11 +457,15 @@ def _qknorm_rope_bwd(
     misc_utils.static_assert(len(mGamma.shape) == 1)
     misc_utils.static_assert(len(mPos.shape) == 1)
     misc_utils.static_assert(len(mFreq.shape) == 1)
-    misc_utils.static_assert(mX.shape[1] % head_dim == 0)
+    misc_utils.static_assert(mX.shape[1] == (head_dim * num_heads))
     misc_utils.static_assert(mX_packed.shape[1] == mDX_packed.shape[1])
     misc_utils.static_assert(mX_packed.shape[1] == mDY_packed.shape[1])
     misc_utils.static_assert(mX_packed.shape[1] % vector_size == 0)
     misc_utils.static_assert(mX_packed.shape[1] % (thr_n * vector_size) == 0)
+    misc_utils.static_assert((head_dim % (2 * vector_size)) == 0)
+    misc_utils.static_assert(lanes_per_head <= 32)
+    misc_utils.static_assert((lanes_per_head % thr_n) == 0)
+    misc_utils.static_assert((lanes_per_head & (lanes_per_head - 1)) == 0)
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
         thread_order="row",
@@ -488,6 +494,8 @@ def _qknorm_rope_bwd(
         dtype=mX.element_type,
         tiler_mn=tiler_mn,
         tv_layout=tv_layout,
+        thr_m=thr_m,
+        thr_n=thr_n,
         val_m=val_m,
         vector_size=vector_size,
     )
@@ -517,7 +525,7 @@ def _compile_qknorm_rope_bwd(
 ) -> Callable:
     m = cute.sym_int()
     vector_size = cutlass.const_expr(_NUM_BITS // dtype.width)
-    misc_utils.static_assert(size % head_dim == 0)
+    misc_utils.static_assert(size == (head_dim * num_heads))
     misc_utils.static_assert(vector_size % 2 == 0)
     mDX = cute.runtime.make_fake_tensor(
         dtype=dtype,
