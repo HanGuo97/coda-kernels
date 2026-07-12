@@ -339,6 +339,23 @@ def _kernel_op(
     return decorator
 
 
+def _preprocess_gemm_operands(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor | None,
+    C: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    # Preprocess A: (M, K) -> (M, K, L) with permute
+    A = preprocess_tensor(A, permute=True, transpose=False)
+    # Preprocess B: (K, N) -> (N, K, L) with transpose + permute
+    B = preprocess_tensor(B, permute=True, transpose=True)
+    # Preprocess D: (M, N) -> (M, N, L) with permute
+    D = preprocess_tensor(D, permute=True, transpose=False) if D is not None else None
+    # Preprocess C: (M, N) -> (M, N, L) with permute
+    C = preprocess_tensor(C, permute=True, transpose=False) if C is not None else None
+    return A, B, D, C
+
+
 def _dispatch(
     GemmCls: type,
     A: torch.Tensor,
@@ -354,14 +371,12 @@ def _dispatch(
     add_to_output: bool = False,
     tuned: bool = True,
 ) -> None:
-    # Preprocess A: (M, K) -> (M, K, L) with permute
-    A = preprocess_tensor(A, permute=True, transpose=False)
-    # Preprocess B: (K, N) -> (N, K, L) with transpose + permute
-    B = preprocess_tensor(B, permute=True, transpose=True)
-    # Preprocess D: (M, N) -> (M, N, L) with permute
-    D = preprocess_tensor(D, permute=True, transpose=False) if D is not None else None
-    # Preprocess C: (M, N) -> (M, N, L) with permute
-    C = preprocess_tensor(C, permute=True, transpose=False) if C is not None else None
+    A, B, D, C = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=D,
+        C=C,
+    )
 
     if tuned:
         return _gemm_epilogue_tuned(
