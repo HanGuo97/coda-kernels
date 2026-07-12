@@ -88,7 +88,10 @@ def _gemm_rope(
     pos: torch.Tensor,
     freq: torch.Tensor,
 ) -> None:
-    epi_args = {"mPos": pos, "mFreq": freq}
+    epi_args = {
+        "mPos": pos,
+        "mFreq": freq,
+    }
     _dispatch(
         GemmCls=GemmRoPE,
         A=A,
