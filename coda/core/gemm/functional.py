@@ -160,6 +160,7 @@ def gemm_lse_select_logits(
     target: torch.Tensor,
     ignore_index: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert target.dtype == torch.int32
     M, _ = A.shape
     _, vocab_size = B.shape
     losses = torch.empty(M, dtype=torch.float32, device=A.device)
