@@ -137,3 +137,42 @@ def gemm_rope(
         freq=epi_args["mFreq"],
     )
     return D
+
+
+def gemm_lse(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    _, vocab_size = B.shape
+    logits = torch.empty(M, vocab_size, dtype=A.dtype, device=A.device)
+    lses = torch.empty(M, dtype=torch.float32, device=A.device)
+    _gemm_lse(
+        A=A,
+        B=B,
+        D=logits,
+        lses=lses,
+        vocab_size=vocab_size,
+    )
+    return logits, lses
+
+
+def gemm_lse_select_logits(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    target: torch.Tensor,
+    ignore_index: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    _, vocab_size = B.shape
+    losses = torch.empty(M, dtype=torch.float32, device=A.device)
+    lses = torch.empty(M, dtype=torch.float32, device=A.device)
+    target_logits = torch.empty(M, dtype=A.dtype, device=A.device)
+    _gemm_lse_select_logits(
+        A=A,
+        B=B,
+        lses=lses,
+        target=target,
+        losses=losses,
+        target_logits=target_logits,
+        vocab_size=vocab_size,
+        ignore_index=ignore_index,
+    )
+    return losses, lses, target_logits
