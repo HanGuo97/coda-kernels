@@ -1,5 +1,7 @@
+import copy
 import torch
 import functools
+import dataclasses
 import cutlass
 import cutlass.cute as cute
 from typing import Callable
@@ -34,6 +36,29 @@ from quack.gemm_tvm_ffi_utils import (
 )
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
+
+
+def _extend_configs(
+    configs: list[GemmConfig],
+    fn: Callable[[GemmConfig], GemmConfig],
+) -> list[GemmConfig]:
+    assert isinstance(configs, list)
+    assert len(configs) == len(set(configs))
+    configs_extended = copy.deepcopy(configs)
+    for config in configs:
+        if config.device_capacity != 9:
+            continue
+        _config = fn(config)
+        if _config in configs_extended:
+            continue
+        configs_extended.append(_config)
+    return configs_extended
+
+
+GEMM_CONFIGS = get_all_configs()
+GEMM_CONFIGS = _extend_configs(GEMM_CONFIGS, lambda config: dataclasses.replace(config, cluster_m=1, cluster_n=1))
+GEMM_CONFIGS = _extend_configs(GEMM_CONFIGS, lambda config: dataclasses.replace(config, cluster_m=1, cluster_n=1, pingpong=False))
+GEMM_CONFIGS = _extend_configs(GEMM_CONFIGS, lambda config: dataclasses.replace(config, is_dynamic_persistent=True))
 
 
 @jit_cache
@@ -259,7 +284,7 @@ def prune_gemm_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs
 
 
 @autotune(
-    configs=[AutotuneConfig(config=c) for c in get_all_configs()],
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     key=["GemmCls", "epi_keys", "pin_tile_M", "pin_tile_N", "add_to_output"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
     cache_results=False,
