@@ -170,7 +170,7 @@ def gemm_lse(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
 def _gemm_lse_select_logits_tuned(
     A: torch.Tensor,
     B: torch.Tensor,
-    lses: torch.Tensor,
+    lses: torch.Tensor | None,
     target: torch.Tensor,
     losses: torch.Tensor,
     target_logits: torch.Tensor,
@@ -181,7 +181,7 @@ def _gemm_lse_select_logits_tuned(
     if config is None:
         config = default_config(A.device)
 
-    M, _ = A.shape
+    M, _, _ = A.shape
     n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
     lse_partial = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
     epi_args = preprocess_epi_args(
@@ -223,7 +223,7 @@ def _gemm_lse_select_logits_tuned(
 def _gemm_lse_select_logits(
     A: torch.Tensor,
     B: torch.Tensor,
-    lses: torch.Tensor,
+    lses: torch.Tensor | None,
     target: torch.Tensor,
     losses: torch.Tensor,
     target_logits: torch.Tensor,
@@ -260,7 +260,10 @@ def gemm_lse_select_logits(
     _, vocab_size = B.shape
     losses = torch.empty(M, dtype=torch.float32, device=A.device)
     target_logits = torch.empty(M, dtype=A.dtype, device=A.device)
-    lses = torch.empty(M, dtype=torch.float32, device=A.device) if return_lse else None
+    if return_lse:
+        lses = torch.empty(M, dtype=torch.float32, device=A.device)
+    else:
+        lses = None
     _gemm_lse_select_logits(
         A=A,
         B=B,
