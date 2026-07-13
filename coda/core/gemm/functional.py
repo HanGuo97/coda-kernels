@@ -8,6 +8,7 @@ from coda.core.gemm.gemm_interface import (
     _kernel_op,
     _gemm_epilogue_tuned,
     prune_gemm_configs,
+    GEMM_CONFIGS,
 )
 from coda.core.gemm.registry import (
     GemmLSE,
@@ -80,6 +81,17 @@ def _gemm_swiglu(
     )
 
 
+def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    _, N = B.shape
+    assert N % 2 == 0, f"swiglu needs an even gate||up width, got N={N}"
+    pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
+    epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
+    _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
+    return pre_act, post_act
+
+
 @_kernel_op("coda::gemm_rope", mutates_args=("D",))
 def _gemm_rope(
     A: torch.Tensor,
@@ -100,17 +112,6 @@ def _gemm_rope(
         epi_args=epi_args,
         epi_keys=make_epi_keys(GemmRoPE, epi_args),
     )
-
-
-def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    M, _ = A.shape
-    _, N = B.shape
-    assert N % 2 == 0, f"swiglu needs an even gate||up width, got N={N}"
-    pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
-    epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
-    _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
-    return pre_act, post_act
 
 
 def gemm_rope(
