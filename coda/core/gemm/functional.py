@@ -1,5 +1,7 @@
 import torch
+from quack.gemm_config import GemmConfig
 from quack.gemm_interface import gemm as quack_gemm
+from quack.cross_entropy import cross_entropy_fwd_out
 from quack.autotuner import autotune, AutotuneConfig
 
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
@@ -7,9 +9,13 @@ from coda.core.gemm.gemm_interface import (
     _dispatch,
     _kernel_op,
     _gemm_epilogue_tuned,
+    _preprocess_gemm_operands,
+    default_config,
     prune_gemm_configs,
     GEMM_CONFIGS,
 )
+
+from coda.core.ops import misc_utils
 from coda.core.gemm.registry import (
     GemmLSE,
     GemmRoPE,
@@ -155,18 +161,106 @@ def gemm_lse(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
     return logits, lses
 
 
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    key=["vocab_size", "ignore_index"],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_lse_select_logits_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    losses: torch.Tensor,
+    target_logits: torch.Tensor,
+    vocab_size: int,
+    ignore_index: int,
+    config: GemmConfig | None,
+) -> None:
+    if config is None:
+        config = default_config(A.device)
+
+    M, _ = A.shape
+    n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
+    lse_partial = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmLSESelectLogits,
+        epi_args={
+            "mLSEVec": lse_partial,
+            "mTarget": target,
+            "mLogits": target_logits,
+            "vocab_size": vocab_size,
+        },
+    )
+    _gemm_epilogue_tuned.fn(
+        GemmCls=GemmLSESelectLogits,
+        A=A,
+        B=B,
+        D=None,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmLSESelectLogits, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+    cross_entropy_fwd_out(
+        x=lse_partial,
+        target=target,
+        target_logit=target_logits,
+        loss=losses,
+        lse=lses,
+        dx=None,
+        weight=None,
+        ignore_index=ignore_index,
+    )
+
+
+@_kernel_op("coda::gemm_lse_select_logits", mutates_args=("lses", "losses", "target_logits"))
+def _gemm_lse_select_logits(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    losses: torch.Tensor,
+    target_logits: torch.Tensor,
+    vocab_size: int,
+    ignore_index: int,
+) -> None:
+    A, B, _, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=None,
+        C=None,
+    )
+    _gemm_lse_select_logits_tuned(
+        A=A,
+        B=B,
+        lses=lses,
+        target=target,
+        losses=losses,
+        target_logits=target_logits,
+        vocab_size=vocab_size,
+        ignore_index=ignore_index,
+    )
+
+
 def gemm_lse_select_logits(
     A: torch.Tensor,
     B: torch.Tensor,
     target: torch.Tensor,
     ignore_index: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_lse: bool,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     assert target.dtype == torch.int32
     M, _ = A.shape
     _, vocab_size = B.shape
     losses = torch.empty(M, dtype=torch.float32, device=A.device)
-    lses = torch.empty(M, dtype=torch.float32, device=A.device)
     target_logits = torch.empty(M, dtype=A.dtype, device=A.device)
+    lses = torch.empty(M, dtype=torch.float32, device=A.device) if return_lse else None
     _gemm_lse_select_logits(
         A=A,
         B=B,
