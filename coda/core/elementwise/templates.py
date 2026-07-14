@@ -1,5 +1,6 @@
 import torch
 import cutlass
+import dataclasses
 import cutlass.cute as cute
 import cuda.bindings.driver as cuda
 from typing import Callable
@@ -12,6 +13,13 @@ from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
+
+
+@dataclasses.dataclass(frozen=True)
+class ElementwiseConfig(object):
+    thr_m: int
+    thr_n: int
+    val_m: int
 
 
 @cute.kernel
@@ -231,21 +239,30 @@ def _elementwise_op(
 
 @autotune(
     configs=[
-        # 128 threads/block
-        AutotuneConfig(thr_m=4, thr_n=32, val_m=4),
-        AutotuneConfig(thr_m=4, thr_n=32, val_m=2),
-        AutotuneConfig(thr_m=2, thr_n=64, val_m=2),
-        # 256 threads/block
-        AutotuneConfig(thr_m=8, thr_n=32, val_m=2),
-        AutotuneConfig(thr_m=4, thr_n=64, val_m=2),
-        AutotuneConfig(thr_m=8, thr_n=32, val_m=4),
-        # 512 threads/block
-        AutotuneConfig(thr_m=8, thr_n=64, val_m=2),
-        AutotuneConfig(thr_m=4, thr_n=128, val_m=2),
-        AutotuneConfig(thr_m=16, thr_n=32, val_m=2),
-        # 1024 threads/block
-        AutotuneConfig(thr_m=8, thr_n=128, val_m=1),
-        AutotuneConfig(thr_m=8, thr_n=128, val_m=2),
+        AutotuneConfig(
+            config=ElementwiseConfig(
+                thr_m=thr_m,
+                thr_n=thr_n,
+                val_m=val_m,
+            )
+        )
+        for thr_m, thr_n, val_m in (
+            # 128 threads/block
+            (4, 32, 4),
+            (4, 32, 2),
+            (2, 64, 2),
+            # 256 threads/block
+            (8, 32, 2),
+            (4, 64, 2),
+            (8, 32, 4),
+            # 512 threads/block
+            (8, 64, 2),
+            (4, 128, 2),
+            (16, 32, 2),
+            # 1024 threads/block
+            (8, 128, 1),
+            (8, 128, 2),
+        )
     ],
     key=["op"],
     cache_results=False,
@@ -255,16 +272,17 @@ def _elementwise_op_tuned(
     X: torch.Tensor,
     Y: torch.Tensor,
     Z: torch.Tensor,
-    thr_m: int,
-    thr_n: int,
-    val_m: int,
+    config: ElementwiseConfig | None,
 ) -> None:
+    if config is None:
+        config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
+
     _elementwise_op(
         op=op,
         X=X,
         Y=Y,
         Z=Z,
-        thr_m=thr_m,
-        thr_n=thr_n,
-        val_m=val_m,
+        thr_m=config.thr_m,
+        thr_n=config.thr_n,
+        val_m=config.val_m,
     )
