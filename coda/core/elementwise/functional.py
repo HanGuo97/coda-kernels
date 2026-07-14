@@ -3,10 +3,56 @@ import cutlass
 import cutlass.cute as cute
 
 from quack.activation import dswiglu
+from quack.autotuner import autotune, AutotuneConfig
 
-from coda.core.ops.misc_utils import static_assert
+from coda.core.ops.misc_utils import static_assert, ceil_div
 from coda.core.gemm.gemm_interface import _kernel_op
-from coda.core.elementwise.templates import _elementwise_op_tuned
+from coda.core.elementwise.rope import qknorm_rope_, qknorm_rope_bwd_
+from coda.core.elementwise.cross_entropy import cross_entropy_fwd_bwd_
+from coda.core.elementwise.templates import ElementwiseConfig, _elementwise_op_tuned
+
+
+_ELEMENTWISE_CONFIGS = tuple(
+    ElementwiseConfig(
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+    )
+    for thr_m, thr_n, val_m in (
+        (4, 32, 4),
+        (8, 64, 4),
+        (16, 16, 4),
+        (1, 128, 4),
+        (8, 128, 4),
+        (4, 256, 4),
+        (2, 512, 4),
+    )
+)
+
+_CE_ELEMENTWISE_CONFIGS = tuple(
+    ElementwiseConfig(
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+    )
+    for thr_m, thr_n, val_m in (
+        (1, 512, 2),
+        (4, 128, 1),
+    )
+)
+
+
+def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs) -> list[AutotuneConfig]:
+    kwargs = named_args | kwargs
+    x = kwargs["x"]
+    assert x.ndim == 2
+    packed_cols = x.shape[1] // 2
+    dtype_width = x.element_size() * 8
+    vector_size = 128 // (2 * dtype_width)
+    return [
+        c for c in configs
+        if packed_cols % (c.kwargs["config"].thr_n * vector_size) == 0
+    ]
 
 
 @cute.jit
@@ -43,3 +89,201 @@ def dswiglu_backward(pre_act: torch.Tensor, grad_out: torch.Tensor) -> torch.Ten
         Z=grad_pre.view(dtype=torch.int32),
     )
     return grad_pre
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in _CE_ELEMENTWISE_CONFIGS],
+    key=["ignore_index"],
+    cache_results=False,
+)
+def _cross_entropy_fwd_bwd_tuned(
+    logits: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    losses: torch.Tensor,
+    ignore_index: int,
+    config: ElementwiseConfig | None,
+) -> None:
+    if config is None:
+        config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
+
+    cross_entropy_fwd_bwd_(
+        logits=logits,
+        lses=lses,
+        target=target,
+        losses=losses,
+        ignore_index=ignore_index,
+        thr_m=config.thr_m,
+        thr_n=config.thr_n,
+        val_m=config.val_m,
+    )
+
+
+@_kernel_op("coda::cross_entropy_fwd_bwd", mutates_args=("logits", "losses"))
+def cross_entropy_fwd_bwd(
+    logits: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    losses: torch.Tensor,
+    ignore_index: int,
+) -> None:
+    _cross_entropy_fwd_bwd_tuned(
+        logits=logits,
+        lses=lses,
+        target=target,
+        losses=losses,
+        ignore_index=ignore_index,
+    )
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
+    key=["head_dim", "num_heads", "num_segments", "eps"],
+    prune_configs_by={"early_config_prune": _prune_rope_configs},
+    cache_results=False,
+)
+def _qknorm_rope_fwd_tuned(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+    config: ElementwiseConfig | None,
+) -> None:
+    if config is None:
+        config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
+
+    qknorm_rope_(
+        x=x,
+        y=y,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+        thr_m=config.thr_m,
+        thr_n=config.thr_n,
+        val_m=config.val_m,
+    )
+
+
+@_kernel_op("coda::qknorm_rope_fwd", mutates_args=("y",))
+def qknorm_rope_fwd(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+) -> None:
+    _qknorm_rope_fwd_tuned(
+        x=x,
+        y=y,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+    )
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
+    key=["head_dim", "num_heads", "num_segments", "eps"],
+    prune_configs_by={"early_config_prune": _prune_rope_configs},
+    cache_results=False,
+)
+def _qknorm_rope_bwd_tuned(
+    dx: torch.Tensor,
+    dy: torch.Tensor,
+    dgamma: torch.Tensor,
+    x: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+    config: ElementwiseConfig | None,
+) -> None:
+    if config is None:
+        config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
+
+    tile_m = config.thr_m * config.val_m
+    num_m_tiles = ceil_div(x.shape[0], tile_m)
+    dgamma_partials = torch.empty(
+        num_m_tiles,
+        x.shape[1],
+        dtype=torch.float32,
+        device=x.device,
+    )
+    qknorm_rope_bwd_(
+        dx=dx,
+        dy=dy,
+        dgamma=dgamma_partials,
+        x=x,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+        thr_m=config.thr_m,
+        thr_n=config.thr_n,
+        val_m=config.val_m,
+    )
+    torch.sum(
+        dgamma_partials.view(num_m_tiles, num_heads, head_dim),
+        dim=(0, 1),
+        out=dgamma,
+    )
+
+
+@_kernel_op("coda::qknorm_rope_bwd", mutates_args=("dx", "dgamma"))
+def qknorm_rope_bwd(
+    dx: torch.Tensor,
+    dy: torch.Tensor,
+    dgamma: torch.Tensor,
+    x: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+) -> None:
+    _qknorm_rope_bwd_tuned(
+        dx=dx,
+        dy=dy,
+        dgamma=dgamma,
+        x=x,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+    )
