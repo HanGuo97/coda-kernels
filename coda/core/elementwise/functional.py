@@ -77,12 +77,17 @@ def _dswiglu_backward(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor) -> None
     return _elementwise_op_tuned(op=_dswiglu_op, X=X, Y=Y, Z=Z)
 
 
-def dswiglu_backward(pre_act: torch.Tensor, grad_out: torch.Tensor) -> torch.Tensor:
+def dswiglu_backward(
+    pre_act: torch.Tensor,
+    grad_out: torch.Tensor,
+    grad_pre: torch.Tensor | None = None,
+) -> torch.Tensor:
     assert pre_act.dtype in (torch.bfloat16, torch.float16)
     assert grad_out.dtype == pre_act.dtype
     assert pre_act.is_contiguous()
     assert grad_out.is_contiguous()
-    grad_pre = torch.empty_like(pre_act)
+    if grad_pre is None:
+        grad_pre = torch.empty_like(pre_act)
     _dswiglu_backward(
         X=pre_act.view(dtype=torch.int32),
         Y=grad_out,
@@ -119,8 +124,8 @@ def _cross_entropy_fwd_bwd_tuned(
     )
 
 
-@_kernel_op("coda::cross_entropy_fwd_bwd", mutates_args=("logits", "losses"))
-def cross_entropy_fwd_bwd(
+@_kernel_op("coda::_cross_entropy_fwd_bwd", mutates_args=("logits", "losses"))
+def _cross_entropy_fwd_bwd(
     logits: torch.Tensor,
     lses: torch.Tensor,
     target: torch.Tensor,
@@ -134,6 +139,26 @@ def cross_entropy_fwd_bwd(
         losses=losses,
         ignore_index=ignore_index,
     )
+
+
+def cross_entropy_fwd_bwd(
+    logits: torch.Tensor,
+    lses: torch.Tensor,
+    target: torch.Tensor,
+    ignore_index: int,
+    losses: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if losses is None:
+        # zero-init as the kernel never writes ignored rows' losses
+        losses = torch.zeros(logits.shape[0], dtype=torch.float32, device=logits.device)
+    _cross_entropy_fwd_bwd(
+        logits=logits,
+        lses=lses,
+        target=target,
+        losses=losses,
+        ignore_index=ignore_index,
+    )
+    return losses
 
 
 @autotune(
@@ -175,8 +200,8 @@ def _qknorm_rope_fwd_tuned(
     )
 
 
-@_kernel_op("coda::qknorm_rope_fwd", mutates_args=("y",))
-def qknorm_rope_fwd(
+@_kernel_op("coda::_qknorm_rope_fwd", mutates_args=("y",))
+def _qknorm_rope_fwd(
     x: torch.Tensor,
     y: torch.Tensor,
     ssq: torch.Tensor,
@@ -200,6 +225,35 @@ def qknorm_rope_fwd(
         num_segments=num_segments,
         eps=eps,
     )
+
+
+def qknorm_rope_fwd(
+    x: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+    y: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if y is None:
+        y = torch.empty_like(x)
+    _qknorm_rope_fwd(
+        x=x,
+        y=y,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+    )
+    return y
 
 
 @autotune(
@@ -258,8 +312,8 @@ def _qknorm_rope_bwd_tuned(
     )
 
 
-@_kernel_op("coda::qknorm_rope_bwd", mutates_args=("dx", "dgamma"))
-def qknorm_rope_bwd(
+@_kernel_op("coda::_qknorm_rope_bwd", mutates_args=("dx", "dgamma"))
+def _qknorm_rope_bwd(
     dx: torch.Tensor,
     dy: torch.Tensor,
     dgamma: torch.Tensor,
@@ -287,3 +341,38 @@ def qknorm_rope_bwd(
         num_segments=num_segments,
         eps=eps,
     )
+
+
+def qknorm_rope_bwd(
+    dy: torch.Tensor,
+    x: torch.Tensor,
+    ssq: torch.Tensor,
+    gamma: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    head_dim: int,
+    num_heads: int,
+    num_segments: int,
+    eps: float,
+    dx: torch.Tensor | None = None,
+    dgamma: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if dx is None:
+        dx = torch.empty_like(x)
+    if dgamma is None:
+        dgamma = torch.empty_like(gamma)
+    _qknorm_rope_bwd(
+        dx=dx,
+        dy=dy,
+        dgamma=dgamma,
+        x=x,
+        ssq=ssq,
+        gamma=gamma,
+        pos=pos,
+        freq=freq,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        num_segments=num_segments,
+        eps=eps,
+    )
+    return dx, dgamma
