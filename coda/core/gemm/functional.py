@@ -52,7 +52,7 @@ def _gemm_tuned(
             out.mul_(alpha)
 
 
-@_kernel_op("coda::gemm", mutates_args=("out",))
+@_kernel_op("coda::_gemm", mutates_args=("out",))
 def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, alpha: torch.Tensor | None) -> None:
     _gemm_tuned(A=A, B=B, out=out, alpha=alpha)
 
@@ -71,7 +71,7 @@ def gemm(
     return out
 
 
-@_kernel_op("coda::gemm_swiglu", mutates_args=("pre_act", "post_act"))
+@_kernel_op("coda::_gemm_swiglu", mutates_args=("pre_act", "post_act"))
 def _gemm_swiglu(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -107,7 +107,7 @@ def gemm_swiglu(
     return pre_act, post_act
 
 
-@_kernel_op("coda::gemm_rope", mutates_args=("D",))
+@_kernel_op("coda::_gemm_rope", mutates_args=("D",))
 def _gemm_rope(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -209,7 +209,7 @@ def _gemm_lse_tuned(
     )
 
 
-@_kernel_op("coda::gemm_lse", mutates_args=("D", "lses"))
+@_kernel_op("coda::_gemm_lse", mutates_args=("D", "lses"))
 def _gemm_lse(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -312,7 +312,7 @@ def _gemm_lse_select_logits_tuned(
     )
 
 
-@_kernel_op("coda::gemm_lse_select_logits", mutates_args=("lses", "losses", "target_logits"))
+@_kernel_op("coda::_gemm_lse_select_logits", mutates_args=("lses", "losses", "target_logits"))
 def _gemm_lse_select_logits(
     A: torch.Tensor,
     B: torch.Tensor,
