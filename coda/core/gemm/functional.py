@@ -87,12 +87,19 @@ def _gemm_swiglu(
     )
 
 
-def gemm_swiglu(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def gemm_swiglu(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    pre_act: torch.Tensor | None = None,
+    post_act: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     _, N = B.shape
     assert N % 2 == 0, f"swiglu needs an even gate||up width, got N={N}"
-    pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
+    if pre_act is None:
+        pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if post_act is None:
+        post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
     epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
     _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
     return pre_act, post_act
@@ -125,10 +132,12 @@ def gemm_rope(
     B: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
+    D: torch.Tensor | None = None,
 ) -> torch.Tensor:
     M, _ = A.shape
     _, N = B.shape
-    D = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if D is None:
+        D = torch.empty(M, N, dtype=A.dtype, device=A.device)
     epi_args = preprocess_epi_args(
         GemmCls=GemmRoPE,
         epi_args={
@@ -254,12 +263,16 @@ def gemm_lse_select_logits(
     target: torch.Tensor,
     ignore_index: int,
     return_lse: bool,
+    losses: torch.Tensor | None = None,
+    target_logits: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     assert target.dtype == torch.int32
     M, _ = A.shape
     _, vocab_size = B.shape
-    losses = torch.empty(M, dtype=torch.float32, device=A.device)
-    target_logits = torch.empty(M, dtype=A.dtype, device=A.device)
+    if losses is None:
+        losses = torch.empty(M, dtype=torch.float32, device=A.device)
+    if target_logits is None:
+        target_logits = torch.empty(M, dtype=A.dtype, device=A.device)
     if return_lse:
         lses = torch.empty(M, dtype=torch.float32, device=A.device)
     else:
