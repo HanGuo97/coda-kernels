@@ -24,6 +24,8 @@ from coda.core.gemm.registry import (
     GemmLSESelectLogits,
 )
 
+torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 128)
+
 
 @autotune(
     configs=[
@@ -155,11 +157,93 @@ def gemm_rope(
     return D
 
 
-def gemm_lse(A: torch.Tensor, B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+@torch.compile(fullgraph=True, dynamic=False)
+def _lse_reduce_compiled(lses: torch.Tensor, lse_partial: torch.Tensor) -> None:
+    lses.copy_(torch.logsumexp(lse_partial, dim=1))
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    key=["vocab_size"],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_lse_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    lses: torch.Tensor,
+    vocab_size: int,
+    config: GemmConfig | None,
+) -> None:
+    if config is None:
+        config = default_config(A.device)
+
+    M, _, _ = A.shape
+    n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
+    lse_partial = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmLSE,
+        epi_args={
+            "mLSEVec": lse_partial,
+            "vocab_size": vocab_size,
+        },
+    )
+    _gemm_epilogue_tuned.fn(
+        GemmCls=GemmLSE,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmLSE, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+    _lse_reduce_compiled(
+        lses=lses,
+        lse_partial=lse_partial,
+    )
+
+
+@_kernel_op("coda::gemm_lse", mutates_args=("D", "lses"))
+def _gemm_lse(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    lses: torch.Tensor,
+    vocab_size: int,
+) -> None:
+    A, B, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+    )
+    _gemm_lse_tuned(
+        A=A,
+        B=B,
+        D=D,
+        lses=lses,
+        vocab_size=vocab_size,
+    )
+
+
+def gemm_lse(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    logits: torch.Tensor | None = None,
+    lses: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     _, vocab_size = B.shape
-    logits = torch.empty(M, vocab_size, dtype=A.dtype, device=A.device)
-    lses = torch.empty(M, dtype=torch.float32, device=A.device)
+    if logits is None:
+        logits = torch.empty(M, vocab_size, dtype=A.dtype, device=A.device)
+    if lses is None:
+        lses = torch.empty(M, dtype=torch.float32, device=A.device)
     _gemm_lse(
         A=A,
         B=B,
