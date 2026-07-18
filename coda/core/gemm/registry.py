@@ -4,7 +4,7 @@ from quack.activation import gate_fn_map
 from coda.core.epilogue.base import compose
 from coda.core.epilogue.activation import Gated, RoPE
 from coda.core.epilogue.lse import LSE, SelectLogits
-from coda.core.epilogue.qknorm import SqSum
+from coda.core.epilogue.qknorm import SqSum, VStore
 
 
 GemmSwiGLU = (
@@ -47,7 +47,12 @@ GemmLSESelectLogits = (
 )
 
 GemmQKVSqSum = (
-    SqSum()
+    compose(
+        [
+            SqSum(),
+            VStore(),
+        ]
+    )
     .bind(
         name="GemmQKVSqSum",
         gemm_cls=GemmSm90,
