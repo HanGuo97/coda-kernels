@@ -81,7 +81,7 @@ def _gemm_swiglu_tuned(
     B: torch.Tensor,
     D: torch.Tensor,
     post_act: torch.Tensor,
-    config: GemmConfig | None,
+    config: GemmConfig,
 ) -> None:
     epi_args = {
         "mAuxOut": post_act,
@@ -162,7 +162,7 @@ def _gemm_rope_tuned(
     D: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
-    config: GemmConfig | None,
+    config: GemmConfig,
 ) -> None:
     epi_args = {
         "mPos": pos,
@@ -260,7 +260,7 @@ def _gemm_qkv_sqsum_tuned(
     ssq: torch.Tensor,
     head_dim: int,
     num_segments: int,
-    config: GemmConfig | None,
+    config: GemmConfig,
 ) -> None:
     epi_args = {
         "mSqSumVec": ssq,
@@ -359,7 +359,7 @@ def _gemm_lse_tuned(
     D: torch.Tensor,
     lses: torch.Tensor,
     vocab_size: int,
-    config: GemmConfig | None,
+    config: GemmConfig,
 ) -> None:
     M, _, _ = A.shape
     n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
@@ -451,7 +451,7 @@ def _gemm_lse_select_logits_tuned(
     target_logits: torch.Tensor,
     vocab_size: int,
     ignore_index: int,
-    config: GemmConfig | None,
+    config: GemmConfig,
 ) -> None:
     M, _, _ = A.shape
     n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
