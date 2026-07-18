@@ -6,7 +6,6 @@ from quack.autotuner import autotune, AutotuneConfig
 
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
 from coda.core.gemm.gemm_interface import (
-    _dispatch,
     _kernel_op,
     _gemm_epilogue_tuned,
     _preprocess_gemm_operands,
@@ -23,6 +22,7 @@ from coda.core.gemm.registry import (
     GemmQKVSqSum,
     GemmLSESelectLogits,
 )
+
 
 torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 128)
 
@@ -71,21 +71,49 @@ def gemm(
     return out
 
 
-@_kernel_op("coda::_gemm_swiglu", mutates_args=("pre_act", "post_act"))
-def _gemm_swiglu(
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_swiglu_tuned(
     A: torch.Tensor,
     B: torch.Tensor,
-    pre_act: torch.Tensor,
+    D: torch.Tensor,
     post_act: torch.Tensor,
+    config: GemmConfig | None,
 ) -> None:
-    epi_args = {"mAuxOut": post_act}
-    _dispatch(
+    epi_args = {
+        "mAuxOut": post_act,
+    }
+    _gemm_epilogue_tuned(
         GemmCls=GemmSwiGLU,
         A=A,
         B=B,
-        D=pre_act,
+        D=D,
+        C=None,
         epi_args=epi_args,
         epi_keys=make_epi_keys(GemmSwiGLU, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+
+
+@_kernel_op("coda::_gemm_swiglu", mutates_args=("D", "post_act"))
+def _gemm_swiglu(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    post_act: torch.Tensor,
+) -> None:
+    _gemm_swiglu_tuned(
+        A=A,
+        B=B,
+        D=D,
+        post_act=post_act,
     )
 
 
@@ -102,9 +130,58 @@ def gemm_swiglu(
         pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
     if post_act is None:
         post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
-    epi_args = preprocess_epi_args(GemmCls=GemmSwiGLU, epi_args={"mAuxOut": post_act})
-    _gemm_swiglu(A=A, B=B, pre_act=pre_act, post_act=epi_args["mAuxOut"])
+    A, B, pre_act, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=pre_act,
+        C=None,
+    )
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmSwiGLU,
+        epi_args={
+            "mAuxOut": post_act,
+        },
+    )
+    _gemm_swiglu(
+        A=A,
+        B=B,
+        D=pre_act,
+        post_act=epi_args["mAuxOut"],
+    )
     return pre_act, post_act
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_rope_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    config: GemmConfig | None,
+) -> None:
+    epi_args = {
+        "mPos": pos,
+        "mFreq": freq,
+    }
+    _gemm_epilogue_tuned(
+        GemmCls=GemmRoPE,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmRoPE, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
 
 
 @_kernel_op("coda::_gemm_rope", mutates_args=("D",))
@@ -115,17 +192,12 @@ def _gemm_rope(
     pos: torch.Tensor,
     freq: torch.Tensor,
 ) -> None:
-    epi_args = {
-        "mPos": pos,
-        "mFreq": freq,
-    }
-    _dispatch(
-        GemmCls=GemmRoPE,
+    _gemm_rope_tuned(
         A=A,
         B=B,
         D=D,
-        epi_args=epi_args,
-        epi_keys=make_epi_keys(GemmRoPE, epi_args),
+        pos=pos,
+        freq=freq,
     )
 
 
@@ -140,6 +212,12 @@ def gemm_rope(
     _, N = B.shape
     if out is None:
         out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    A, B, out, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=out,
+        C=None,
+    )
     epi_args = preprocess_epi_args(
         GemmCls=GemmRoPE,
         epi_args={
@@ -184,14 +262,12 @@ def _gemm_qkv_sqsum_tuned(
     num_segments: int,
     config: GemmConfig | None,
 ) -> None:
-    if config is None:
-        config = default_config(A.device)
     epi_args = {
         "mSqSumVec": ssq,
         "head_dim": head_dim,
         "num_segments": num_segments,
     }
-    _gemm_epilogue_tuned.fn(
+    _gemm_epilogue_tuned(
         GemmCls=GemmQKVSqSum,
         A=A,
         B=B,
@@ -216,12 +292,6 @@ def _gemm_qkv_sqsum(
     head_dim: int,
     num_segments: int,
 ) -> None:
-    A, B, D, _ = _preprocess_gemm_operands(
-        A=A,
-        B=B,
-        D=D,
-        C=None,
-    )
     _gemm_qkv_sqsum_tuned(
         A=A,
         B=B,
@@ -247,6 +317,12 @@ def gemm_qkv_sqsum(
     if ssq is None:
         # zero-init as heads whose segments a tile never writes must read 0
         ssq = torch.zeros(M, (N // head_dim) * num_segments, dtype=torch.float32, device=A.device)
+    A, B, out, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=out,
+        C=None,
+    )
     epi_args = preprocess_epi_args(
         GemmCls=GemmQKVSqSum,
         epi_args={
@@ -285,9 +361,6 @@ def _gemm_lse_tuned(
     vocab_size: int,
     config: GemmConfig | None,
 ) -> None:
-    if config is None:
-        config = default_config(A.device)
-
     M, _, _ = A.shape
     n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
     lse_partial = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
@@ -298,7 +371,7 @@ def _gemm_lse_tuned(
             "vocab_size": vocab_size,
         },
     )
-    _gemm_epilogue_tuned.fn(
+    _gemm_epilogue_tuned(
         GemmCls=GemmLSE,
         A=A,
         B=B,
@@ -326,12 +399,6 @@ def _gemm_lse(
     lses: torch.Tensor,
     vocab_size: int,
 ) -> None:
-    A, B, D, _ = _preprocess_gemm_operands(
-        A=A,
-        B=B,
-        D=D,
-        C=None,
-    )
     _gemm_lse_tuned(
         A=A,
         B=B,
@@ -353,6 +420,12 @@ def gemm_lse(
         logits = torch.empty(M, vocab_size, dtype=A.dtype, device=A.device)
     if lses is None:
         lses = torch.empty(M, dtype=torch.float32, device=A.device)
+    A, B, logits, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=logits,
+        C=None,
+    )
     _gemm_lse(
         A=A,
         B=B,
@@ -380,9 +453,6 @@ def _gemm_lse_select_logits_tuned(
     ignore_index: int,
     config: GemmConfig | None,
 ) -> None:
-    if config is None:
-        config = default_config(A.device)
-
     M, _, _ = A.shape
     n_tiles = misc_utils.ceil_div(vocab_size, config.tile_n)
     lse_partial = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
@@ -395,7 +465,7 @@ def _gemm_lse_select_logits_tuned(
             "vocab_size": vocab_size,
         },
     )
-    _gemm_epilogue_tuned.fn(
+    _gemm_epilogue_tuned(
         GemmCls=GemmLSESelectLogits,
         A=A,
         B=B,
@@ -432,12 +502,6 @@ def _gemm_lse_select_logits(
     vocab_size: int,
     ignore_index: int,
 ) -> None:
-    A, B, _, _ = _preprocess_gemm_operands(
-        A=A,
-        B=B,
-        D=None,
-        C=None,
-    )
     _gemm_lse_select_logits_tuned(
         A=A,
         B=B,
@@ -470,6 +534,12 @@ def gemm_lse_select_logits(
         lses = torch.empty(M, dtype=torch.float32, device=A.device)
     else:
         lses = None
+    A, B, _, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=None,
+        C=None,
+    )
     _gemm_lse_select_logits(
         A=A,
         B=B,
