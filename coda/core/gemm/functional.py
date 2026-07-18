@@ -134,12 +134,12 @@ def gemm_rope(
     B: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
-    D: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
 ) -> torch.Tensor:
     M, _ = A.shape
     _, N = B.shape
-    if D is None:
-        D = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
     epi_args = preprocess_epi_args(
         GemmCls=GemmRoPE,
         epi_args={
@@ -150,11 +150,120 @@ def gemm_rope(
     _gemm_rope(
         A=A,
         B=B,
-        D=D,
+        D=out,
         pos=epi_args["mPos"],
         freq=epi_args["mFreq"],
     )
-    return D
+    return out
+
+
+# a head spans at most ceil(head_dim / tile_n) + 1 tiles; size ssq for the narrowest sm90 tile
+_SQSUM_MIN_TILE_N = min(
+    c.tile_n
+    for c in GEMM_CONFIGS
+    if c.device_capacity == 9
+)
+
+
+def _sqsum_num_segments(head_dim: int) -> int:
+    return misc_utils.ceil_div(head_dim, _SQSUM_MIN_TILE_N) + 1
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    key=["head_dim", "num_segments"],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_qkv_sqsum_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    ssq: torch.Tensor,
+    head_dim: int,
+    num_segments: int,
+    config: GemmConfig | None,
+) -> None:
+    if config is None:
+        config = default_config(A.device)
+    epi_args = {
+        "mSqSumVec": ssq,
+        "head_dim": head_dim,
+        "num_segments": num_segments,
+    }
+    _gemm_epilogue_tuned.fn(
+        GemmCls=GemmQKVSqSum,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmQKVSqSum, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+
+
+@_kernel_op("coda::_gemm_qkv_sqsum", mutates_args=("D", "ssq"))
+def _gemm_qkv_sqsum(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    ssq: torch.Tensor,
+    head_dim: int,
+    num_segments: int,
+) -> None:
+    A, B, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+    )
+    _gemm_qkv_sqsum_tuned(
+        A=A,
+        B=B,
+        D=D,
+        ssq=ssq,
+        head_dim=head_dim,
+        num_segments=num_segments,
+    )
+
+
+def gemm_qkv_sqsum(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    head_dim: int,
+    num_segments: int,
+    out: torch.Tensor | None = None,
+    ssq: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    _, N = B.shape
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if ssq is None:
+        # zero-init as heads whose segments a tile never writes must read 0
+        ssq = torch.zeros(M, (N // head_dim) * num_segments, dtype=torch.float32, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmQKVSqSum,
+        epi_args={
+            "mSqSumVec": ssq,
+            "head_dim": head_dim,
+            "num_segments": num_segments,
+        },
+    )
+    _gemm_qkv_sqsum(
+        A=A,
+        B=B,
+        D=out,
+        ssq=epi_args["mSqSumVec"],
+        head_dim=head_dim,
+        num_segments=num_segments,
+    )
+    return out, ssq
 
 
 @torch.compile(fullgraph=True, dynamic=False)
