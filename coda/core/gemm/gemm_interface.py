@@ -13,10 +13,7 @@ from quack.gemm_interface import (
     default_config,
     prune_invalid_gemm_configs,
 )
-from quack.autotuner import (
-    autotune,
-    AutotuneConfig,
-)
+from quack.autotuner import AutotuneConfig
 from quack.gemm_config import (
     GemmConfig,
     get_all_configs,
@@ -283,12 +280,6 @@ def prune_gemm_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs
     return configs
 
 
-@autotune(
-    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
-    key=["GemmCls", "epi_keys", "pin_tile_M", "pin_tile_N", "add_to_output"],
-    prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
-)
 def _gemm_epilogue_tuned(
     GemmCls: type,
     A: torch.Tensor,
@@ -379,56 +370,3 @@ def _preprocess_gemm_operands(
     # Preprocess C: (M, N) -> (M, N, L) with permute
     C = preprocess_tensor(C, permute=True, transpose=False) if C is not None else None
     return A, B, D, C
-
-
-def _dispatch(
-    GemmCls: type,
-    A: torch.Tensor,
-    B: torch.Tensor,
-    D: torch.Tensor | None,
-    C: torch.Tensor | None = None,
-    *,
-    epi_args: dict,
-    epi_keys: tuple,
-    pin_tile_M: int | None = None,
-    pin_tile_N: int | None = None,
-    batch_idx_permute: torch.Tensor | None = None,
-    add_to_output: bool = False,
-    tuned: bool = True,
-) -> None:
-    A, B, D, C = _preprocess_gemm_operands(
-        A=A,
-        B=B,
-        D=D,
-        C=C,
-    )
-
-    if tuned:
-        return _gemm_epilogue_tuned(
-            GemmCls=GemmCls,
-            A=A,
-            B=B,
-            D=D,
-            C=C,
-            epi_args=epi_args,
-            epi_keys=epi_keys,
-            pin_tile_M=pin_tile_M,
-            pin_tile_N=pin_tile_N,
-            batch_idx_permute=batch_idx_permute,
-            add_to_output=add_to_output,
-        )
-    else:
-        return _gemm_epilogue_tuned.fn(
-            GemmCls=GemmCls,
-            A=A,
-            B=B,
-            D=D,
-            C=C,
-            epi_args=epi_args,
-            epi_keys=epi_keys,
-            pin_tile_M=pin_tile_M,
-            pin_tile_N=pin_tile_N,
-            batch_idx_permute=batch_idx_permute,
-            add_to_output=add_to_output,
-            config=None,
-        )
