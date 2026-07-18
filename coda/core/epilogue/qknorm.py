@@ -6,6 +6,7 @@ from typing import NamedTuple
 
 from quack import layout_utils
 from quack.gemm_sm90 import GemmSm90
+from quack.gemm_act import GemmActMixin
 from quack.varlen_utils import VarlenManager
 from quack.cute_dsl_utils import (
     ParamsBase,
@@ -14,6 +15,7 @@ from quack.cute_dsl_utils import (
 from quack.epi_ops import (
     EpiOp,
     EpiContext,
+    TileStore,
     VecReduce,
     assume_stride_divisibility,
     colvec_reduce_accumulate,
@@ -186,3 +188,25 @@ class SqSum(Epilogue):
             )
 
         return ()
+
+
+class VStore(Epilogue):
+
+    def declares(self) -> tuple[EpiOp, ...]:
+        return (TileStore("mAuxOut"),)
+
+    def auxiliary_mixin(self) -> type | None:
+        return GemmActMixin
+
+    @cute.jit
+    def visit(
+        self,
+        gemm: GemmSm90,
+        params: ParamsBase,
+        epi_loop_tensors: dict,
+        tRS_rD: cute.Tensor,
+        tRS_rC: cute.Tensor | None,
+    ) -> tuple[cute.Tensor, ...]:
+        # TODO: this epilogue writes down the entire QKV, hence 3x
+        # IO than necessary. We need to predicate so it only writes V
+        return (tRS_rD,)
