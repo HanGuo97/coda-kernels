@@ -16,8 +16,8 @@
 
 
 ## Updates
-- July 19, 2026. Released `v0.1`.
-- June 23, 2026. We are restructuring CODA. For legacy version, please check `v1` tag.
+- July 19, 2026. Released `v0.2`.
+- June 23, 2026. We are restructuring CODA. For legacy version, please check `v0.1` tag.
 
 ## Installation
 
