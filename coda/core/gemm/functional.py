@@ -9,7 +9,6 @@ from coda.core.gemm.gemm_interface import (
     _kernel_op,
     _gemm_epilogue_tuned,
     _preprocess_gemm_operands,
-    default_config,
     prune_gemm_configs,
     GEMM_CONFIGS,
 )
@@ -130,7 +129,7 @@ def gemm_swiglu(
         pre_act = torch.empty(M, N, dtype=A.dtype, device=A.device)
     if post_act is None:
         post_act = torch.empty(M, N // 2, dtype=A.dtype, device=A.device)
-    A, B, pre_act, _ = _preprocess_gemm_operands(
+    A, B, D, _ = _preprocess_gemm_operands(
         A=A,
         B=B,
         D=pre_act,
@@ -145,7 +144,7 @@ def gemm_swiglu(
     _gemm_swiglu(
         A=A,
         B=B,
-        D=pre_act,
+        D=D,
         post_act=epi_args["mAuxOut"],
     )
     return pre_act, post_act
@@ -212,7 +211,7 @@ def gemm_rope(
     _, N = B.shape
     if out is None:
         out = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    A, B, out, _ = _preprocess_gemm_operands(
+    A, B, D, _ = _preprocess_gemm_operands(
         A=A,
         B=B,
         D=out,
@@ -228,7 +227,7 @@ def gemm_rope(
     _gemm_rope(
         A=A,
         B=B,
-        D=out,
+        D=D,
         pos=epi_args["mPos"],
         freq=epi_args["mFreq"],
     )
@@ -317,7 +316,7 @@ def gemm_qkv_sqsum(
     if ssq is None:
         # zero-init as heads whose segments a tile never writes must read 0
         ssq = torch.zeros(M, (N // head_dim) * num_segments, dtype=torch.float32, device=A.device)
-    A, B, out, _ = _preprocess_gemm_operands(
+    A, B, D, _ = _preprocess_gemm_operands(
         A=A,
         B=B,
         D=out,
@@ -334,7 +333,7 @@ def gemm_qkv_sqsum(
     _gemm_qkv_sqsum(
         A=A,
         B=B,
-        D=out,
+        D=D,
         ssq=epi_args["mSqSumVec"],
         head_dim=head_dim,
         num_segments=num_segments,
@@ -420,7 +419,7 @@ def gemm_lse(
         logits = torch.empty(M, vocab_size, dtype=A.dtype, device=A.device)
     if lses is None:
         lses = torch.empty(M, dtype=torch.float32, device=A.device)
-    A, B, logits, _ = _preprocess_gemm_operands(
+    A, B, D, _ = _preprocess_gemm_operands(
         A=A,
         B=B,
         D=logits,
@@ -429,7 +428,7 @@ def gemm_lse(
     _gemm_lse(
         A=A,
         B=B,
-        D=logits,
+        D=D,
         lses=lses,
         vocab_size=vocab_size,
     )
