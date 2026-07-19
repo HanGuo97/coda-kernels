@@ -9,7 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
     "nvidia-cutlass-dsl",
-    "quack-kernels",
+    "quack-kernels==0.6.1",
     "apache-tvm-ffi",
     "torch-c-dlpack-ext",
     "einops",
