@@ -33,9 +33,11 @@ class LinearQKNormRoPE(torch.autograd.Function):
             head_dim=head_dim,
             num_segments=num_segments,
         )
+        pre_qk = pre[:, :size_qk]
+        ssq_qk = ssq[:, :size_ssq_qk]
         out_qk = qknorm_rope_fwd(
-            x=pre[:, :size_qk],
-            ssq=ssq[:, :size_ssq_qk],
+            x=pre_qk,
+            ssq=ssq_qk,
             gamma=gamma,
             pos=positions,
             freq=frequencies,
@@ -44,12 +46,12 @@ class LinearQKNormRoPE(torch.autograd.Function):
             num_segments=num_segments,
             eps=eps,
         )
-        ctx.save_for_backward(x, weight, gamma, positions, frequencies, pre, ssq)
+        ctx.save_for_backward(x, weight, gamma, positions, frequencies, pre_qk, ssq_qk)
         ctx.num_heads_q = num_heads_q
         ctx.num_heads_k = num_heads_k
         ctx.num_segments = num_segments
         ctx.size_qk = size_qk
-        ctx.size_ssq = size_ssq_qk
+        ctx.size_ssq_qk = size_ssq_qk
         ctx.head_dim = head_dim
         ctx.eps = eps
         return out_qk[:, :size_q], out_qk[:, size_q:], pre[:, size_qk:]
@@ -63,13 +65,19 @@ class LinearQKNormRoPE(torch.autograd.Function):
         dk: torch.Tensor,
         dv: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None, None]:
-        x, weight, gamma, positions, frequencies, pre, ssq = ctx.saved_tensors
-
+        x, weight, gamma, positions, frequencies, pre_qk, ssq_qk = ctx.saved_tensors
+        grad_pre = torch.empty(
+            pre_qk.shape[0],
+            weight.shape[0],
+            dtype=pre_qk.dtype,
+            device=pre_qk.device,
+        )
+        grad_pre[:, ctx.size_qk:].copy_(dv)
         _, dgamma = qknorm_rope_bwd(
             dq=dq,
             dk=dk,
-            x=pre,
-            ssq=ssq,
+            x=pre_qk,
+            ssq=ssq_qk,
             gamma=gamma,
             pos=positions,
             freq=frequencies,
@@ -100,7 +108,7 @@ def linear_qknorm_rope(
     assert gamma.dtype == x.dtype
     assert positions.shape == (x.shape[0],)
     assert positions.dtype == torch.int32
-    assert frequencies.shape == (head_dim * (num_heads_q + num_heads_k) // 2,)
+    assert frequencies.shape == ((head_dim * (num_heads_q + num_heads_k)) // 2,)
     assert frequencies.dtype == torch.float32
     return LinearQKNormRoPE.apply(
         x,
