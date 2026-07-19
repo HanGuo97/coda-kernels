@@ -24,7 +24,7 @@ def qknorm_rope_kernel(
     mPos: cute.Tensor,
     mFreq: cute.Tensor,
     head_dim: cutlass.Constexpr[int],
-    num_heads: cutlass.Constexpr[int],
+    num_heads_qk: cutlass.Constexpr[int],
     num_segments: cutlass.Constexpr[int],
     eps: cutlass.Constexpr[float],
     dtype: type[cute.Numeric],
@@ -109,7 +109,7 @@ def _qknorm_rope(
     mPos: cute.Tensor,
     mFreq: cute.Tensor,
     head_dim: cutlass.Constexpr[int],
-    num_heads: cutlass.Constexpr[int],
+    num_heads_qk: cutlass.Constexpr[int],
     num_segments: cutlass.Constexpr[int],
     eps: cutlass.Constexpr[float],
     thr_m: cutlass.Constexpr[int],
@@ -126,7 +126,7 @@ def _qknorm_rope(
     misc_utils.static_assert(len(mGamma.shape) == 1)
     misc_utils.static_assert(len(mPos.shape) == 1)
     misc_utils.static_assert(len(mFreq.shape) == 1)
-    misc_utils.static_assert(mX.shape[1] == (head_dim * num_heads))
+    misc_utils.static_assert(mX.shape[1] == (head_dim * num_heads_qk))
     misc_utils.static_assert(mX_packed.shape[1] == mY_packed.shape[1])
     misc_utils.static_assert(mX_packed.shape[1] % vector_size == 0)
     misc_utils.static_assert(mX_packed.shape[1] % (thr_n * vector_size) == 0)
@@ -151,7 +151,7 @@ def _qknorm_rope(
         mPos=mPos,
         mFreq=mFreq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
         dtype=mX.element_type,
@@ -174,7 +174,7 @@ def _qknorm_rope(
 def _compile_qknorm_rope(
     size: int,
     head_dim: int,
-    num_heads: int,
+    num_heads_qk: int,
     num_segments: int,
     eps: float,
     dtype: type[cute.Numeric],
@@ -186,7 +186,7 @@ def _compile_qknorm_rope(
 ) -> Callable:
     m = cute.sym_int()
     vector_size = cutlass.const_expr(_NUM_BITS // dtype.width)
-    misc_utils.static_assert(size == (head_dim * num_heads))
+    misc_utils.static_assert(size == (head_dim * num_heads_qk))
     misc_utils.static_assert((vector_size % 2) == 0)
     mX = cute.runtime.make_fake_tensor(
         dtype=dtype,
@@ -234,7 +234,7 @@ def _compile_qknorm_rope(
         mPos=mPos,
         mFreq=mFreq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
         thr_m=thr_m,
@@ -253,7 +253,7 @@ def qknorm_rope_(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_qk: int,
     num_segments: int,
     eps: float,
     thr_m: int,
@@ -263,7 +263,7 @@ def qknorm_rope_(
     fn = _compile_qknorm_rope(
         size=x.shape[1],
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
         dtype=torch2cute_dtype_map[x.dtype],
