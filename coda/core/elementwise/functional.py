@@ -49,10 +49,22 @@ def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwarg
     packed_cols = x.shape[1] // 2
     dtype_width = x.element_size() * 8
     vector_size = 128 // (2 * dtype_width)
-    return [
+    configs_pruned = [
         c for c in configs
         if packed_cols % (c.kwargs["config"].thr_n * vector_size) == 0
     ]
+
+    # bwd only (fwd passes no dq)
+    dq = kwargs.get("dq", None)
+    if dq is not None:
+        assert dq.ndim == 2
+        packed_cols_dq = dq.shape[1] // 2
+        configs_pruned = [
+            c for c in configs_pruned
+            if packed_cols_dq % (c.kwargs["config"].thr_n * vector_size) == 0
+        ]
+
+    return configs_pruned
 
 
 @cute.jit
@@ -163,7 +175,7 @@ def cross_entropy_fwd_bwd(
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
-    key=["head_dim", "num_heads", "num_segments", "eps"],
+    key=["head_dim", "num_heads_qk", "num_segments", "eps"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
     cache_results=False,
 )
@@ -175,7 +187,7 @@ def _qknorm_rope_fwd_tuned(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_qk: int,
     num_segments: int,
     eps: float,
     config: ElementwiseConfig | None,
@@ -191,7 +203,7 @@ def _qknorm_rope_fwd_tuned(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
         thr_m=config.thr_m,
@@ -209,7 +221,7 @@ def _qknorm_rope_fwd(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_qk: int,
     num_segments: int,
     eps: float,
 ) -> None:
@@ -221,7 +233,7 @@ def _qknorm_rope_fwd(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
     )
@@ -234,7 +246,7 @@ def qknorm_rope_fwd(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_qk: int,
     num_segments: int,
     eps: float,
     y: torch.Tensor | None = None,
@@ -249,7 +261,7 @@ def qknorm_rope_fwd(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_qk=num_heads_qk,
         num_segments=num_segments,
         eps=eps,
     )
@@ -258,13 +270,14 @@ def qknorm_rope_fwd(
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
-    key=["head_dim", "num_heads", "num_segments", "eps"],
+    key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
     cache_results=False,
 )
 def _qknorm_rope_bwd_tuned(
     dx: torch.Tensor,
-    dy: torch.Tensor,
+    dq: torch.Tensor,
+    dk: torch.Tensor,
     dgamma: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
@@ -272,7 +285,8 @@ def _qknorm_rope_bwd_tuned(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
     config: ElementwiseConfig | None,
@@ -282,6 +296,7 @@ def _qknorm_rope_bwd_tuned(
 
     tile_m = config.thr_m * config.val_m
     num_m_tiles = ceil_div(x.shape[0], tile_m)
+    num_heads_qk = num_heads_q + num_heads_k
     dgamma_partials = torch.empty(
         num_m_tiles,
         x.shape[1],
@@ -290,7 +305,8 @@ def _qknorm_rope_bwd_tuned(
     )
     qknorm_rope_bwd_(
         dx=dx,
-        dy=dy,
+        dq=dq,
+        dk=dk,
         dgamma=dgamma_partials,
         x=x,
         ssq=ssq,
@@ -298,7 +314,8 @@ def _qknorm_rope_bwd_tuned(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
         thr_m=config.thr_m,
@@ -306,7 +323,7 @@ def _qknorm_rope_bwd_tuned(
         val_m=config.val_m,
     )
     torch.sum(
-        dgamma_partials.view(num_m_tiles, num_heads, head_dim),
+        dgamma_partials.view(num_m_tiles, num_heads_qk, head_dim),
         dim=(0, 1),
         out=dgamma,
     )
@@ -315,7 +332,8 @@ def _qknorm_rope_bwd_tuned(
 @_kernel_op("coda::_qknorm_rope_bwd", mutates_args=("dx", "dgamma"))
 def _qknorm_rope_bwd(
     dx: torch.Tensor,
-    dy: torch.Tensor,
+    dq: torch.Tensor,
+    dk: torch.Tensor,
     dgamma: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
@@ -323,13 +341,15 @@ def _qknorm_rope_bwd(
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
 ) -> None:
     _qknorm_rope_bwd_tuned(
         dx=dx,
-        dy=dy,
+        dq=dq,
+        dk=dk,
         dgamma=dgamma,
         x=x,
         ssq=ssq,
@@ -337,21 +357,24 @@ def _qknorm_rope_bwd(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
     )
 
 
 def qknorm_rope_bwd(
-    dy: torch.Tensor,
+    dq: torch.Tensor,
+    dk: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
     gamma: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
     dx: torch.Tensor | None = None,
@@ -363,7 +386,8 @@ def qknorm_rope_bwd(
         dgamma = torch.empty_like(gamma)
     _qknorm_rope_bwd(
         dx=dx,
-        dy=dy,
+        dq=dq,
+        dk=dk,
         dgamma=dgamma,
         x=x,
         ssq=ssq,
@@ -371,7 +395,8 @@ def qknorm_rope_bwd(
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads=num_heads,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
     )
