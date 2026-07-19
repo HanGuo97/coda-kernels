@@ -317,7 +317,6 @@ def qknorm_rope_bwd_kernel(
 
     idX_packed = cute.make_identity_tensor(mX_packed.shape)
     gDX_packed = cute.local_tile(mDX_packed, tiler_mn, (bidx, bidy))
-    gDY_packed = cute.local_tile(mDY_packed, tiler_mn, (bidx, bidy))
     gX_packed = cute.local_tile(mX_packed, tiler_mn, (bidx, bidy))
     cX_packed = cute.local_tile(idX_packed, tiler_mn, (bidx, bidy))
     config = memory_utils.MemoryCopyConfig(
@@ -326,15 +325,6 @@ def qknorm_rope_bwd_kernel(
         num_bits_per_copy=mX_packed.element_type.width * vector_size,
         tiler_mn=tiler_mn,
         layout_tv=tv_layout,
-    )
-    copy_outputs_DY = memory_utils.copy(
-        src=gDY_packed,
-        dst="rmem",
-        crd=cX_packed,
-        shape=mDY_packed.shape,
-        config=config,
-        thread_index=tidx,
-        smem_allocator=allocator,
     )
     copy_outputs_X = memory_utils.copy(
         src=gX_packed,
@@ -345,9 +335,42 @@ def qknorm_rope_bwd_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     )
-    tXrDY_packed = copy_outputs_DY.dst_thread
     tXrX_packed = copy_outputs_X.dst_thread
     tXcX_packed = copy_outputs_X.crd_thread
+
+    misc_utils.static_assert(mDQ_packed.element_type == mDK_packed.element_type)
+    tXrDY_packed = creation_utils.allocate_tensor_like(
+        tensor=tXrX_packed,
+        memspace="rmem",
+        dtype=mDQ_packed.element_type,
+    )
+    num_blocks_q = cutlass.const_expr(
+        (head_dim * num_heads_q) //
+        (2 * tile_N_packed)
+    )
+    if bidy < num_blocks_q:
+        gDQ_packed = cute.local_tile(mDQ_packed, tiler_mn, (bidx, bidy))
+        _ = memory_utils.copy(
+            src=gDQ_packed,
+            dst=tXrDY_packed,
+            crd=cX_packed,
+            shape=mX_packed.shape,
+            config=config,
+            thread_index=tidx,
+            smem_allocator=allocator,
+        )
+    else:
+        gDK_packed = cute.local_tile(mDK_packed, tiler_mn, (bidx, bidy - num_blocks_q))
+        _ = memory_utils.copy(
+            src=gDK_packed,
+            dst=tXrDY_packed,
+            crd=cX_packed,
+            shape=mX_packed.shape,
+            config=config,
+            thread_index=tidx,
+            smem_allocator=allocator,
+        )
+
     tXrDX_packed = creation_utils.allocate_tensor_like(
         tensor=tXrX_packed,
         memspace="rmem",
