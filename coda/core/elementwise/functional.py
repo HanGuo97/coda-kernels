@@ -175,7 +175,7 @@ def cross_entropy_fwd_bwd(
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
-    key=["head_dim", "num_heads_qk", "num_segments", "eps"],
+    key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps", "interleaved"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
     cache_results=False,
 )
@@ -183,13 +183,16 @@ def _qknorm_rope_fwd_tuned(
     x: torch.Tensor,
     y: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads_qk: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
     config: ElementwiseConfig | None,
 ) -> None:
     if config is None:
@@ -199,13 +202,16 @@ def _qknorm_rope_fwd_tuned(
         x=x,
         y=y,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads_qk=num_heads_qk,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
         thr_m=config.thr_m,
         thr_n=config.thr_n,
         val_m=config.val_m,
@@ -217,38 +223,47 @@ def _qknorm_rope_fwd(
     x: torch.Tensor,
     y: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads_qk: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
 ) -> None:
     _qknorm_rope_fwd_tuned(
         x=x,
         y=y,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads_qk=num_heads_qk,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
     )
 
 
 def qknorm_rope_fwd(
     x: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
-    num_heads_qk: int,
+    num_heads_q: int,
+    num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
     y: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if y is None:
@@ -257,20 +272,23 @@ def qknorm_rope_fwd(
         x=x,
         y=y,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
-        num_heads_qk=num_heads_qk,
+        num_heads_q=num_heads_q,
+        num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
     )
     return y
 
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
-    key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps"],
+    key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps", "interleaved"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
     cache_results=False,
 )
@@ -278,10 +296,13 @@ def _qknorm_rope_bwd_tuned(
     dx: torch.Tensor,
     dq: torch.Tensor,
     dk: torch.Tensor,
-    dgamma: torch.Tensor,
+    dv: torch.Tensor,
+    dgamma_q: torch.Tensor,
+    dgamma_k: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
@@ -289,6 +310,7 @@ def _qknorm_rope_bwd_tuned(
     num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
     config: ElementwiseConfig | None,
 ) -> None:
     if config is None:
@@ -307,10 +329,12 @@ def _qknorm_rope_bwd_tuned(
         dx=dx,
         dq=dq,
         dk=dk,
+        dv=dv,
         dgamma=dgamma_partials,
         x=x,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
@@ -318,26 +342,39 @@ def _qknorm_rope_bwd_tuned(
         num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
         thr_m=config.thr_m,
         thr_n=config.thr_n,
         val_m=config.val_m,
     )
-    torch.sum(
-        dgamma_partials.view(num_m_tiles, num_heads_qk, head_dim),
-        dim=(0, 1),
-        out=dgamma,
-    )
+    if interleaved:
+        raise NotImplementedError
+    else:
+        dgamma_partials = dgamma_partials.view(num_m_tiles, num_heads_qk, head_dim)
+        torch.sum(
+            dgamma_partials[:, :num_heads_q, :],
+            dim=(0, 1),
+            out=dgamma_q,
+        )
+        torch.sum(
+            dgamma_partials[:, num_heads_q:, :],
+            dim=(0, 1),
+            out=dgamma_k,
+        )
 
 
-@_kernel_op("coda::_qknorm_rope_bwd", mutates_args=("dx", "dgamma"))
+@_kernel_op("coda::_qknorm_rope_bwd", mutates_args=("dx", "dgamma_q", "dgamma_k"))
 def _qknorm_rope_bwd(
     dx: torch.Tensor,
     dq: torch.Tensor,
     dk: torch.Tensor,
-    dgamma: torch.Tensor,
+    dv: torch.Tensor,
+    dgamma_q: torch.Tensor,
+    dgamma_k: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
@@ -345,15 +382,19 @@ def _qknorm_rope_bwd(
     num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
 ) -> None:
     _qknorm_rope_bwd_tuned(
         dx=dx,
         dq=dq,
         dk=dk,
-        dgamma=dgamma,
+        dv=dv,
+        dgamma_q=dgamma_q,
+        dgamma_k=dgamma_k,
         x=x,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
@@ -361,15 +402,18 @@ def _qknorm_rope_bwd(
         num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
     )
 
 
 def qknorm_rope_bwd(
     dq: torch.Tensor,
     dk: torch.Tensor,
+    dv: torch.Tensor,
     x: torch.Tensor,
     ssq: torch.Tensor,
-    gamma: torch.Tensor,
+    gamma_q: torch.Tensor,
+    gamma_k: torch.Tensor,
     pos: torch.Tensor,
     freq: torch.Tensor,
     head_dim: int,
@@ -377,21 +421,28 @@ def qknorm_rope_bwd(
     num_heads_k: int,
     num_segments: int,
     eps: float,
+    interleaved: bool,
     dx: torch.Tensor | None = None,
-    dgamma: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    dgamma_q: torch.Tensor | None = None,
+    dgamma_k: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if dx is None:
         dx = torch.empty_like(x)
-    if dgamma is None:
-        dgamma = torch.empty_like(gamma)
+    if dgamma_q is None:
+        dgamma_q = torch.empty_like(gamma_q)
+    if dgamma_k is None:
+        dgamma_k = torch.empty_like(gamma_k)
     _qknorm_rope_bwd(
         dx=dx,
         dq=dq,
         dk=dk,
-        dgamma=dgamma,
+        dv=dv,
+        dgamma_q=dgamma_q,
+        dgamma_k=dgamma_k,
         x=x,
         ssq=ssq,
-        gamma=gamma,
+        gamma_q=gamma_q,
+        gamma_k=gamma_k,
         pos=pos,
         freq=freq,
         head_dim=head_dim,
@@ -399,5 +450,6 @@ def qknorm_rope_bwd(
         num_heads_k=num_heads_k,
         num_segments=num_segments,
         eps=eps,
+        interleaved=interleaved,
     )
-    return dx, dgamma
+    return dx, dgamma_q, dgamma_k
