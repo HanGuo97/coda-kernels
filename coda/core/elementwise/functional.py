@@ -369,7 +369,7 @@ def _qknorm_rope_bwd(
     dx: torch.Tensor,
     dq: torch.Tensor,
     dk: torch.Tensor,
-    dv: torch.Tensor,
+    dv: torch.Tensor | None,
     dgamma_q: torch.Tensor,
     dgamma_k: torch.Tensor,
     x: torch.Tensor,
@@ -427,17 +427,34 @@ def qknorm_rope_bwd(
     dgamma_q: torch.Tensor | None = None,
     dgamma_k: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    if dx is None:
-        dx = torch.empty_like(x)
+    if interleaved:
+        # x = [q, k, v]
+        if dx is None:
+            dx = torch.empty_like(x)
+        kernel_dx = dx
+        kernel_dv = dv
+    else:
+        # x = [q, k]
+        size_qk = x.shape[1]
+        if dx is None:
+            dx = torch.empty(
+                x.shape[0],
+                size_qk + dv.shape[1],
+                dtype=x.dtype,
+                device=x.device,
+            )
+        dx[:, size_qk:].copy_(dv)
+        kernel_dx = dx[:, :size_qk]
+        kernel_dv = None
     if dgamma_q is None:
         dgamma_q = torch.empty_like(gamma_q)
     if dgamma_k is None:
         dgamma_k = torch.empty_like(gamma_k)
     _qknorm_rope_bwd(
-        dx=dx,
+        dx=kernel_dx,
         dq=dq,
         dk=dk,
-        dv=dv,
+        dv=kernel_dv,
         dgamma_q=dgamma_q,
         dgamma_k=dgamma_k,
         x=x,
