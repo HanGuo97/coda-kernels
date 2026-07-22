@@ -56,7 +56,8 @@ def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwarg
 
     # bwd only (fwd passes no dq)
     dq = kwargs.get("dq", None)
-    if dq is not None:
+    interleaved = kwargs["interleaved"]
+    if dq is not None and not interleaved:
         assert dq.ndim == 2
         packed_cols_dq = dq.shape[1] // 2
         configs_pruned = [
@@ -296,7 +297,7 @@ def _qknorm_rope_bwd_tuned(
     dx: torch.Tensor,
     dq: torch.Tensor,
     dk: torch.Tensor,
-    dv: torch.Tensor,
+    dv: torch.Tensor | None,
     dgamma_q: torch.Tensor,
     dgamma_k: torch.Tensor,
     x: torch.Tensor,
