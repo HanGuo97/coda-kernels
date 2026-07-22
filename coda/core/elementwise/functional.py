@@ -2,6 +2,7 @@ import torch
 import cutlass
 import cutlass.cute as cute
 
+from einops import rearrange
 from quack.activation import dswiglu
 from quack.autotuner import autotune, AutotuneConfig
 
@@ -267,6 +268,8 @@ def qknorm_rope_fwd(
     interleaved: bool,
     y: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    if interleaved:
+        assert (num_heads_q % num_heads_k) == 0
     if y is None:
         y = torch.empty_like(x)
     _qknorm_rope_fwd(
@@ -349,9 +352,35 @@ def _qknorm_rope_bwd_tuned(
         val_m=config.val_m,
     )
     if interleaved:
-        raise NotImplementedError
+        num_groups = num_heads_k
+        num_heads_per_group_q = (num_heads_q // num_heads_k)
+        num_heads_per_group_qkv = num_heads_per_group_q + 2
+        dgamma_partials = rearrange(
+            dgamma_partials,
+            "nt (g h d) -> nt g h d",
+            nt=num_m_tiles,
+            g=num_groups,
+            h=num_heads_per_group_qkv,
+            d=head_dim,
+        )
+        torch.sum(
+            dgamma_partials[:, :, :num_heads_per_group_q, :],
+            dim=(0, 1, 2),
+            out=dgamma_q,
+        )
+        torch.sum(
+            dgamma_partials[:, :, num_heads_per_group_q, :],
+            dim=(0, 1),
+            out=dgamma_k,
+        )
     else:
-        dgamma_partials = dgamma_partials.view(num_m_tiles, num_heads_qk, head_dim)
+        dgamma_partials = rearrange(
+            dgamma_partials,
+            "nt (h d) -> nt h d",
+            nt=num_m_tiles,
+            h=num_heads_qk,
+            d=head_dim,
+        )
         torch.sum(
             dgamma_partials[:, :num_heads_q, :],
             dim=(0, 1),
@@ -428,6 +457,7 @@ def qknorm_rope_bwd(
     dgamma_k: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if interleaved:
+        assert (num_heads_q % num_heads_k) == 0
         # x = [q, k, v]
         if dx is None:
             dx = torch.empty_like(x)
