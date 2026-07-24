@@ -56,6 +56,38 @@ class Affine(Epilogue):
         return ()
 
 
+class Scale(Epilogue):
+
+    def declares(self) -> tuple[EpiOp, ...]:
+        return (
+            RowVecLoad("mRowVecBroadcast"),
+            ColVecLoad("mColVecBroadcast"),
+        )
+
+    @cute.jit
+    def visit(
+        self,
+        gemm: GemmSm90,
+        params: ParamsBase,
+        epi_loop_tensors: dict,
+        tRS_rD: cute.Tensor,
+        tRS_rC: cute.Tensor | None,
+    ) -> tuple[cute.Tensor, ...]:
+
+        tDrRowVec = epi_loop_tensors.get("mRowVecBroadcast")
+        tDrColVec = epi_loop_tensors.get("mColVecBroadcast")
+
+        if cutlass.const_expr(tDrRowVec is not None):
+            for i in cutlass.range_constexpr(cute.size(tDrRowVec)):
+                tRS_rD[i] *= tDrRowVec[i]
+
+        if cutlass.const_expr(tDrColVec is not None):
+            for i in cutlass.range_constexpr(cute.size(tDrColVec)):
+                tRS_rD[i] *= tDrColVec[i]
+
+        return ()
+
+
 class Residual(Epilogue):
 
     def __init__(self, name: str | None = None) -> None:
