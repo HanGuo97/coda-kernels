@@ -6,7 +6,7 @@ from quack import layout_utils
 from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import ParamsBase
 from quack.varlen_utils import VarlenManager
-from quack.epi_ops import EpiOp, ColVecLoad, VecReduce, EpiContext, _get_lane_warp_layouts
+from quack.epi_ops import EpiOp, ColVecLoad, ColVecReduce, EpiContext, _get_lane_warp_layouts
 
 from coda.core.ops import misc_utils
 from coda.core.ops import reduction_utils
@@ -14,10 +14,7 @@ from coda.core.epilogue.base import Const, Epilogue
 from coda.core.epilogue.epi_ops import ColVecStore
 
 
-class LSEReduce(VecReduce):
-
-    dim = 0
-    epi_m_major_preference = -1
+class LSEReduce(ColVecReduce):
 
     @cute.jit
     def begin(self, gemm: GemmSm90, param: cute.Tensor, smem_tensor: cute.Tensor | None, ctx: EpiContext) -> tuple:
