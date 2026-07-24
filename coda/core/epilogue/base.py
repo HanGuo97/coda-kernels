@@ -188,6 +188,11 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
         _BOUND_NAMES.add(name)
 
     ops = _normalize(epilogue.declares())
+
+    # no duplicate names
+    op_names = [op.name for op in ops]
+    assert len(set(op_names)) == len(op_names)
+
     aux_ops = [op for op in ops if isinstance(op, TileStore)]
     if len(aux_ops) == 1:
         aux_op = aux_ops[0]
