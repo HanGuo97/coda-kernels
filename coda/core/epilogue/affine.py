@@ -3,7 +3,8 @@ import cutlass.cute as cute
 
 from quack import utils as quack_utils
 from quack.cute_dsl_utils import ParamsBase
-from quack.epi_ops import EpiOp, Scalar, ColVecLoad, RowVecLoad, TileLoad
+from quack.epi_ops import EpiOp, Scalar, ColVecLoad, RowVecLoad, TileLoad, TileStore
+from quack.gemm_act import GemmActMixin
 from quack.gemm_sm90 import GemmSm90
 
 from coda.core.epilogue.base import Epilogue
@@ -58,11 +59,40 @@ class Affine(Epilogue):
 
 class Scale(Epilogue):
 
+    def __init__(
+        self,
+        auxiliary_store: bool,
+        row_name: str | None = None,
+        col_name: str | None = None,
+    ) -> None:
+        self.auxiliary_store = auxiliary_store
+
+        if row_name is not None:
+            self.row_name = row_name
+        else:
+            self.row_name = "mRowVecBroadcast"
+
+        if col_name is not None:
+            self.col_name = col_name
+        else:
+            self.col_name = "mColVecBroadcast"
+
     def declares(self) -> tuple[EpiOp, ...]:
-        return (
-            RowVecLoad("mRowVecBroadcast"),
-            ColVecLoad("mColVecBroadcast"),
+        epi_ops = (
+            RowVecLoad(self.row_name),
+            ColVecLoad(self.col_name),
         )
+
+        if self.auxiliary_store:
+            epi_ops = epi_ops + (TileStore("mAuxOut"),)
+
+        return epi_ops
+
+    def auxiliary_mixin(self) -> type | None:
+        if self.auxiliary_store:
+            return GemmActMixin
+        else:
+            return None
 
     @cute.jit
     def visit(
@@ -73,19 +103,26 @@ class Scale(Epilogue):
         tRS_rD: cute.Tensor,
         tRS_rC: cute.Tensor | None,
     ) -> tuple[cute.Tensor, ...]:
-
-        tDrRowVec = epi_loop_tensors.get("mRowVecBroadcast")
-        tDrColVec = epi_loop_tensors.get("mColVecBroadcast")
+        tDrRowVec = epi_loop_tensors.get(self.row_name)
+        tDrColVec = epi_loop_tensors.get(self.col_name)
+        if cutlass.const_expr(self.auxiliary_store):
+            tRS_rAuxOut = cute.make_rmem_tensor(tRS_rD.layout.shape, gemm.acc_dtype)
+            cute.autovec_copy(tRS_rD, tRS_rAuxOut)
+        else:
+            tRS_rAuxOut = tRS_rD
 
         if cutlass.const_expr(tDrRowVec is not None):
             for i in cutlass.range_constexpr(cute.size(tDrRowVec)):
-                tRS_rD[i] *= tDrRowVec[i]
+                tRS_rAuxOut[i] *= tDrRowVec[i]
 
         if cutlass.const_expr(tDrColVec is not None):
             for i in cutlass.range_constexpr(cute.size(tDrColVec)):
-                tRS_rD[i] *= tDrColVec[i]
+                tRS_rAuxOut[i] *= tDrColVec[i]
 
-        return ()
+        if cutlass.const_expr(self.auxiliary_store):
+            return (tRS_rAuxOut,)
+        else:
+            return ()
 
 
 class Residual(Epilogue):
