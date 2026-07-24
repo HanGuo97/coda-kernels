@@ -106,7 +106,14 @@ class Gated(Epilogue):
 
 class RoPE(Epilogue):
 
-    def __init__(self, pos_name: str | None = None, freq_name: str | None = None) -> None:
+    def __init__(
+        self,
+        auxiliary_store: bool,
+        pos_name: str | None = None,
+        freq_name: str | None = None,
+    ) -> None:
+        self.auxiliary_store = auxiliary_store
+
         if pos_name is not None:
             self.pos_name = pos_name
         else:
@@ -118,7 +125,21 @@ class RoPE(Epilogue):
             self.freq_name = "mFreq"
 
     def declares(self) -> tuple[EpiOp, ...]:
-        return (ColVecLoad(self.pos_name), RowVecLoad(self.freq_name))
+        epi_ops = (
+            ColVecLoad(self.pos_name),
+            RowVecLoad(self.freq_name),
+        )
+
+        if self.auxiliary_store:
+            epi_ops = epi_ops + (TileStore("mAuxOut"),)
+
+        return epi_ops
+
+    def auxiliary_mixin(self) -> type | None:
+        if self.auxiliary_store:
+            return GemmActMixin
+        else:
+            return None
 
     @cute.jit
     def visit(
@@ -132,12 +153,23 @@ class RoPE(Epilogue):
         rPos = epi_loop_tensors.get(self.pos_name)
         rFreq = epi_loop_tensors.get(self.freq_name)
         if cutlass.const_expr(rPos is not None and rFreq is not None):
+            if cutlass.const_expr(self.auxiliary_store):
+                tRS_rAuxOut = cute.make_rmem_tensor(tRS_rD.layout.shape, gemm.acc_dtype)
+            else:
+                tRS_rAuxOut = tRS_rD
+
             for i in cutlass.range_constexpr(cute.size(tRS_rD) // 2):
                 a = rPos[2 * i].to(dtype=gemm.acc_dtype) * rFreq[2 * i].to(dtype=gemm.acc_dtype)
                 c = cute.math.cos(a, fastmath=True)
                 s = cute.math.sin(a, fastmath=True)
                 x = tRS_rD[2 * i]
                 y = tRS_rD[2 * i + 1]
-                tRS_rD[2 * i] = x * c + y * s
-                tRS_rD[2 * i + 1] = y * c - x * s
-        return ()
+                tRS_rAuxOut[2 * i] = x * c + y * s
+                tRS_rAuxOut[2 * i + 1] = y * c - x * s
+        else:
+            tRS_rAuxOut = tRS_rD
+
+        if cutlass.const_expr(self.auxiliary_store):
+            return (tRS_rAuxOut,)
+        else:
+            return ()
