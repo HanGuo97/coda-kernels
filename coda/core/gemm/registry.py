@@ -90,6 +90,21 @@ GemmLSE = (
     )
 )
 
+GemmScaleLSE = (
+    compose(
+        [
+            Scale(
+                auxiliary_store=False,
+            ),
+            LSE(),
+        ]
+    )
+    .bind(
+        name="GemmScaleLSE",
+        gemm_cls=GemmSm90,
+    )
+)
+
 GemmLSESelectLogits = (
     compose(
         [
