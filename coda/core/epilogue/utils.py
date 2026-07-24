@@ -16,6 +16,8 @@ from quack.epi_ops import (
     VecReduce,
     ColVecLoad,
     RowVecLoad,
+    ColVecReduce,
+    RowVecReduce,
 )
 
 from coda.core.epilogue.epi_ops import ColVecStore
@@ -133,11 +135,19 @@ def _make_fake_epi_arg(
             divisibility=4,
             leading_dim=1,
         )
-    if isinstance(op, VecReduce):
+    if isinstance(op, ColVecReduce):
         n_tiles = cute.sym_int()
         return quack_make_fake_tensor(
             dtype=cutlass_dtype,
             shape=(l, m, n_tiles),
+            leading_dim=2,
+            divisibility=1,
+        )
+    if isinstance(op, RowVecReduce):
+        m_tiles = cute.sym_int()
+        return quack_make_fake_tensor(
+            dtype=cutlass_dtype,
+            shape=(l, m_tiles, n),
             leading_dim=2,
             divisibility=1,
         )
