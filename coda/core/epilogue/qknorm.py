@@ -25,23 +25,23 @@ from coda.core.epilogue.base import Epilogue, Const
 
 
 @mlir_namedtuple
-class SqSumReduceParam(NamedTuple):
+class HeadSqSumReduceParam(NamedTuple):
     mSSq: cute.Tensor
     head_dim: cutlass.Constexpr[int]
     num_segments: cutlass.Constexpr[int]
 
 
-class SqSumReduce(VecReduce):
+class HeadSqSumReduce(VecReduce):
 
     dim = 0
     epi_m_major_preference = -1
 
     def param_fields(self) -> list:
-        return [(self.name, SqSumReduceParam, None)]
+        return [(self.name, HeadSqSumReduceParam, None)]
 
     def to_params(self, gemm: GemmSm90, args: tuple) -> dict:
         return {
-            self.name: SqSumReduceParam(
+            self.name: HeadSqSumReduceParam(
                 mSSq=assume_stride_divisibility(getattr(args, self.name)),
                 head_dim=args.head_dim,
                 num_segments=args.num_segments,
@@ -69,7 +69,7 @@ class SqSumReduce(VecReduce):
     def end_loop(
         self,
         gemm: GemmSm90,
-        param: SqSumReduceParam,
+        param: HeadSqSumReduceParam,
         state: tuple,
         epi_coord: cute.Coord,
         epi_tile: cute.Tile,
@@ -152,7 +152,7 @@ class SqSumReduce(VecReduce):
             cute.filter_zeros(rSSq_cur).fill(0.0)
 
 
-class SqSum(Epilogue):
+class HeadSqSum(Epilogue):
 
     def __init__(self, name: str | None = None) -> None:
         if name is not None:
@@ -161,7 +161,7 @@ class SqSum(Epilogue):
             self.name = "mSqSumVec"
 
     def declares(self) -> tuple[EpiOp, ...]:
-        return (SqSumReduce(self.name),)
+        return (HeadSqSumReduce(self.name),)
 
     def declare_constexprs(self) -> tuple[Const, ...]:
         return (Const("head_dim", int), Const("num_segments", int))
