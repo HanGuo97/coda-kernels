@@ -14,7 +14,7 @@ from quack.cute_dsl_utils import (
 from quack.epi_ops import (
     EpiOp,
     EpiContext,
-    VecReduce,
+    ColVecReduce,
     assume_stride_divisibility,
     colvec_reduce_accumulate,
     _get_lane_warp_layouts,
@@ -31,10 +31,7 @@ class HeadSqSumReduceParam(NamedTuple):
     num_segments: cutlass.Constexpr[int]
 
 
-class HeadSqSumReduce(VecReduce):
-
-    dim = 0
-    epi_m_major_preference = -1
+class HeadSqSumReduce(ColVecReduce):
 
     def param_fields(self) -> list:
         return [(self.name, HeadSqSumReduceParam, None)]
