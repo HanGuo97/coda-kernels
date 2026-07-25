@@ -5,7 +5,10 @@ from coda.core.epilogue.base import compose
 from coda.core.epilogue.affine import Affine, Scale
 from coda.core.epilogue.activation import Gated, RoPE
 from coda.core.epilogue.lse import LSE, SelectLogits
-from coda.core.epilogue.qknorm import SqSum
+from coda.core.epilogue.partials import SqSum
+from coda.core.epilogue.qknorm import HeadSqSum
+from coda.core.epilogue.swiglu_bwd import SwiGLUBwdZdZ
+from coda.core.epilogue.rmsnorm_bwd import ResidualRMSNormBwd
 
 
 GemmScale = (
@@ -41,6 +44,14 @@ GemmScaleSwiGLU = (
     )
     .bind(
         name="GemmScaleSwiGLU",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmSwiGLUBwdZdZ = (
+    SwiGLUBwdZdZ()
+    .bind(
+        name="GemmSwiGLUBwdZdZ",
         gemm_cls=GemmSm90,
     )
 )
@@ -135,9 +146,35 @@ GemmScaleLSESelectLogits = (
 )
 
 GemmQKVSqSum = (
-    SqSum()
+    HeadSqSum()
     .bind(
         name="GemmQKVSqSum",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmResidualSqSumScaledAux = (
+    compose(
+        [
+            Affine(),
+            SqSum(),
+            Scale(
+                auxiliary_store=True,
+                row_name="mRowVecScale",
+                col_name="mColVecScale",
+            ),
+        ]
+    )
+    .bind(
+        name="GemmResidualSqSumScaledAux",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmResidualRMSNormBwd = (
+    ResidualRMSNormBwd()
+    .bind(
+        name="GemmResidualRMSNormBwd",
         gemm_cls=GemmSm90,
     )
 )
