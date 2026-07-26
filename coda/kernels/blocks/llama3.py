@@ -72,57 +72,30 @@ def _compute_rstd_torch(s: torch.Tensor, eps: float) -> torch.Tensor:
     return r
 
 
-def compute_rstd(s: torch.Tensor, eps: float, use_quack: bool) -> torch.Tensor:
-    # `s` is partially (mean) reduced tensor squared
-    # so we first reduce it globally before computing `rstd`
-    if use_quack:
-        assert s.ndim == 2
-        n = s.shape[-1]
-        return quack_rms_final_reduce(
-            x=s,
-            scale=1.0 / n,
-            eps=eps,
-        )
-    else:
-        return _compute_rstd_torch(
-            s=s,
-            eps=eps,
-        )
-
-
-def rmsnorm_gemm_rope_fwd(
+def block_pre_forward(
     x: torch.Tensor,
     w: torch.Tensor,
-    w_n: torch.Tensor,
-    cos_sin: torch.Tensor,
+    wn: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
     eps: float,
-    backend: str,
-    use_quack: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    B, T, _ = x.shape
-    D0, D1 = w.shape
-    assert x.shape == (B, T, D0)
-    assert w.shape == (D0, D1)
-    assert w_n.shape == (D0,)
-    x = rearrange(x, "b t d -> (b t) d", b=B, t=T, d=D0)
-
-    h = x * rearrange(w_n, "d -> 1 d")
-    rstd_out = compute_rstd(
-        s=x ** 2,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    assert wn.dtype == x.dtype
+    _, n = x.shape
+    h = x * rearrange(wn, "d -> 1 d")
+    rstd = quack_rms_final_reduce(
+        x=x.float() ** 2,
+        scale=1.0 / n,
         eps=eps,
-        use_quack=use_quack,
     )
-    z_out, y_out = _KERNELS[backend].gemm_rmsnorm_rope(
+    qkv = gemm_rmsnorm_rope(
         A=h,
-        B=w,
-        R=rstd_out,
-        cos_sin=cos_sin,
+        B=w.mT,
+        rstd=rstd,
+        positions=positions,
+        frequencies=frequencies,
     )
-
-    y_out = rearrange(y_out, "(b t) d -> b t d", b=B, t=T, d=D1)
-    z_out = rearrange(z_out, "(b t) d -> b t d", b=B, t=T, d=D1)
-    rstd_out = rearrange(rstd_out, "(b t) -> b t", b=B, t=T)
-    return y_out, z_out, rstd_out
+    return qkv, rstd
 
 
 def rmsnorm_gemm_rope_bwd(
