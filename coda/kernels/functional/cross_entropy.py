@@ -3,7 +3,7 @@ from quack.cross_entropy import cross_entropy_fwd
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 from coda.core.elementwise.functional import cross_entropy_fwd_bwd
-from coda.core.gemm.functional import gemm, gemm_lse, gemm_lse_select_logits
+from coda.core.gemm.functional import gemm, gemm_lse, gemm_lse_select_logits, gemm_scalar_scale
 
 
 def _forward_dlogits(
@@ -79,11 +79,11 @@ def _backward_dlogits(
     need_dweight: bool,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     if need_dx:
-        dx = gemm(dlogits, weight, alpha=dloss)
+        dx = gemm_scalar_scale(dlogits, weight, alpha=dloss)
     else:
         dx = None
     if need_dweight:
-        dweight = gemm(dlogits.mT, x, alpha=dloss)
+        dweight = gemm_scalar_scale(dlogits.mT, x, alpha=dloss)
     else:
         dweight = None
     return dx, dweight
