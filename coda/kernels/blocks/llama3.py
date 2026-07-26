@@ -78,11 +78,11 @@ def block_pre_backward(
         # TODO: the function itself also transposes `B`
         # maybe we can directly pass in `BT` there
         B=w.mT,
-        pre=x,
         W=wn,
-        rstd=rstd,
-        ZdZ=zdz,
         dX=dx,
+        pre=x,
+        ZdZ=zdz,
+        rstd=rstd,
     )
     dw = gemm(x_out.mT, dz)
     return dx_out, dw, dwn
@@ -153,37 +153,43 @@ class BlockPre(torch.autograd.Function):
         )
 
 
-def layer_pre(
+def block_pre(
     x: torch.Tensor,
     w: torch.Tensor,
     wn: torch.Tensor,
-    cos_sin: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
     num_heads: int,
-    head_dim: int,
     eps: float,
-    transpose: bool,
-    backend: str,
-    use_compile: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return LayerPre.apply(
-        x,
+    batch, length, _ = x.shape
+    dim1, dim0 = w.shape
+    assert x.shape == (batch, length, dim0)
+    assert x.dtype in (torch.float16, torch.bfloat16)
+    assert w.shape == (dim1, dim0)
+    assert w.dtype == x.dtype
+    assert wn.shape == (dim0,)
+    assert wn.dtype == x.dtype
+    assert positions.shape == (batch * length,)
+    assert positions.dtype in (torch.float32, torch.int32)
+    assert frequencies.shape == (dim1,)
+    assert frequencies.dtype == torch.float32
+    residual, qkv = BlockPre.apply(
+        rearrange(x, "b t d -> (b t) d"),
         w,
         wn,
-        cos_sin,
-        cos,
-        sin,
+        positions,
+        frequencies,
         num_heads,
-        head_dim,
         eps,
-        transpose,
-        backend,
-        use_compile,
+    )
+    return (
+        rearrange(residual, "(b t) d -> b t d", b=batch),
+        rearrange(qkv, "(b t) d -> b t d", b=batch),
     )
 
 
-def layer_post(
+def block_post(
     x0: torch.Tensor,
     y0: torch.Tensor,
     w0: torch.Tensor,
@@ -194,13 +200,18 @@ def layer_post(
     wn1: torch.Tensor,
     targets: torch.Tensor,
     eps: float,
-    transpose: bool,
-    backend: str,
-    use_compile: bool,
+    ignore_index: int = -100,
+    reduction: str = "mean",
 ) -> torch.Tensor:
-    return LayerPost.apply(
-        x0,
-        y0,
+    batch, length, _ = x0.shape
+    assert wn0.dtype == x0.dtype
+    assert wn1.dtype == x0.dtype
+    assert targets.shape == (batch * length,)
+    assert targets.dtype == torch.int32
+    assert reduction in ("mean", "sum")
+    return BlockPost.apply(
+        rearrange(x0, "b t d -> (b t) d"),
+        rearrange(y0, "b t d -> (b t) d"),
         w0,
         w1,
         w2,
@@ -209,13 +220,12 @@ def layer_post(
         wn1,
         targets,
         eps,
-        transpose,
-        backend,
-        use_compile,
+        ignore_index,
+        reduction,
     )
 
 
-def layer(
+def block(
     x0: torch.Tensor,
     y0: torch.Tensor,
     w0: torch.Tensor,
@@ -224,32 +234,32 @@ def layer(
     w3: torch.Tensor,
     wn0: torch.Tensor,
     wn1: torch.Tensor,
-    cos_sin: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
     num_heads: int,
-    head_dim: int,
     eps: float,
-    transpose: bool,
-    backend: str,
-    use_compile: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return Layer.apply(
-        x0,
-        y0,
+    batch, length, _ = x0.shape
+    assert wn0.dtype == x0.dtype
+    assert wn1.dtype == x0.dtype
+    assert positions.shape == (batch * length,)
+    assert positions.dtype in (torch.float32, torch.int32)
+    assert frequencies.dtype == torch.float32
+    residual, qkv = Block.apply(
+        rearrange(x0, "b t d -> (b t) d"),
+        rearrange(y0, "b t d -> (b t) d"),
         w0,
         w1,
         w2,
         w3,
         wn0,
         wn1,
-        cos_sin,
-        cos,
-        sin,
+        positions,
+        frequencies,
         num_heads,
-        head_dim,
         eps,
-        transpose,
-        backend,
-        use_compile,
+    )
+    return (
+        rearrange(residual, "(b t) d -> b t d", b=batch),
+        rearrange(qkv, "(b t) d -> b t d", b=batch),
     )
