@@ -2,7 +2,7 @@ from quack.gemm_sm90 import GemmSm90
 from quack.activation import gate_fn_map
 
 from coda.core.epilogue.base import compose
-from coda.core.epilogue.affine import Affine, Scale
+from coda.core.epilogue.affine import Residual, Scale
 from coda.core.epilogue.activation import Gated, RoPE
 from coda.core.epilogue.lse import LSE, SelectLogits
 from coda.core.epilogue.partials import SqSum
@@ -146,7 +146,7 @@ GemmQKVSqSum = (
 GemmResidualSqSumScaledAux = (
     compose(
         [
-            Affine(),
+            Residual(),
             SqSum(),
             Scale(
                 auxiliary_store=True,
