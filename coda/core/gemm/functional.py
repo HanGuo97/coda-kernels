@@ -959,7 +959,7 @@ def gemm_residual_partial_rmsnorm_bwd(
     assert rstd.shape == (M,)
     assert rstd.dtype == torch.float32
     if dW is None:
-        dW = torch.empty(N, dtype=torch.float32, device=W.device)
+        dW = torch.empty(N, dtype=torch.float32, device=A.device)
     if post is None:
         post = torch.empty(M, N, dtype=A.dtype, device=A.device)
 
@@ -1032,7 +1032,7 @@ def _gemm_swiglu_bwd_zdz_tuned(
     )
 
 
-@_kernel_op("coda::_gemm_swiglu_bwd_zdz", mutates_args=("D", "dZ_packed", "ZdZ"))
+@_kernel_op("coda::_gemm_swiglu_bwd_zdz", mutates_args=("D", "ZdZ", "dZ_packed"))
 def _gemm_swiglu_bwd_zdz(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -1055,31 +1055,32 @@ def gemm_swiglu_bwd_zdz(
     A: torch.Tensor,
     B: torch.Tensor,
     Z: torch.Tensor,
-    dX: torch.Tensor | None = None,
     dZ: torch.Tensor | None = None,
     ZdZ: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     N, _ = B.shape
     assert Z.shape == (M, 2 * N)
     assert Z.dtype == A.dtype
-    if dX is None:
-        dX = torch.empty(M, N, dtype=A.dtype, device=A.device)
     if dZ is None:
         dZ = torch.empty(M, 2 * N, dtype=A.dtype, device=A.device)
     if ZdZ is None:
         ZdZ = torch.empty(M, dtype=torch.float32, device=A.device)
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
 
     # Transpose B for GEMM (we want A @ B.T)
     B_T = B.mT
 
+    # Z and dZ travel as (M, N) 32-bit containers: two model-dtype halves per element
     Z_packed = Z.view(dtype=torch.int32)
     dZ_packed = dZ.view(dtype=torch.int32)
 
     A, B_T, D, _ = _preprocess_gemm_operands(
         A=A,
         B=B_T,
-        D=dX,
+        D=out,
         C=None,
     )
     _gemm_swiglu_bwd_zdz(
@@ -1090,7 +1091,7 @@ def gemm_swiglu_bwd_zdz(
         Z_packed=Z_packed,
         dZ_packed=dZ_packed,
     )
-    return dX, dZ, ZdZ
+    return dZ, ZdZ, out
 
 
 @autotune(
