@@ -77,9 +77,10 @@ class ScalarScale(Epilogue):
         tRS_rD: cute.Tensor,
         tRS_rC: cute.Tensor | None,
     ) -> tuple[cute.Tensor, ...]:
-        if cutlass.const_expr(hasattr(params, "alpha") and params.alpha is not None):
+        scale = getattr(params, self.name, None)
+        if cutlass.const_expr(scale is not None):
+            alpha = quack_utils.load_scalar_or_pointer(scale)
             rD = tRS_rD.load()
-            alpha = quack_utils.load_scalar_or_pointer(params.alpha)
             rD *= alpha
             tRS_rD.store(rD)
 
