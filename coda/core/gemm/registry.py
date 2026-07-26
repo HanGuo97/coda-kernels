@@ -66,29 +66,19 @@ GemmRoPE = (
     )
 )
 
-GemmRoPEAux = (
-    RoPE(
-        auxiliary_store=True,
-    )
-    .bind(
-        name="GemmRoPEAux",
-        gemm_cls=GemmSm90,
-    )
-)
-
-GemmScaleRoPEAux = (
+GemmScaleRoPE = (
     compose(
         [
             Scale(
                 auxiliary_store=False,
             ),
             RoPE(
-                auxiliary_store=True,
+                auxiliary_store=False,
             ),
         ]
     )
     .bind(
-        name="GemmScaleRoPEAux",
+        name="GemmScaleRoPE",
         gemm_cls=GemmSm90,
     )
 )
