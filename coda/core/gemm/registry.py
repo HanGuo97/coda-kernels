@@ -2,7 +2,7 @@ from quack.gemm_sm90 import GemmSm90
 from quack.activation import gate_fn_map
 
 from coda.core.epilogue.base import compose
-from coda.core.epilogue.affine import Residual, Scale
+from coda.core.epilogue.affine import Residual, Scale, ScalarScale
 from coda.core.epilogue.activation import Gated, RoPE
 from coda.core.epilogue.lse import LSE, SelectLogits
 from coda.core.epilogue.partials import SqSum
@@ -10,6 +10,14 @@ from coda.core.epilogue.qknorm import HeadSqSum
 from coda.core.epilogue.swiglu_bwd import SwiGLUBwdZdZ
 from coda.core.epilogue.rmsnorm_bwd import ResidualRMSNormBwd
 
+
+GemmScalarScale = (
+    ScalarScale()
+    .bind(
+        name="GemmScalarScale",
+        gemm_cls=GemmSm90,
+    )
+)
 
 GemmScale = (
     Scale(
@@ -165,6 +173,36 @@ GemmResidualRMSNormBwd = (
     ResidualRMSNormBwd()
     .bind(
         name="GemmResidualRMSNormBwd",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmDequantSwiGLU = (
+    compose(
+        [
+            ScalarScale(name="dequant"),
+            Gated(
+                fn=gate_fn_map["swiglu"],
+            ),
+        ]
+    )
+    .bind(
+        name="GemmDequantSwiGLU",
+        gemm_cls=GemmSm90,
+    )
+)
+
+GemmDequantRoPE = (
+    compose(
+        [
+            ScalarScale(name="dequant"),
+            RoPE(
+                auxiliary_store=False,
+            ),
+        ]
+    )
+    .bind(
+        name="GemmDequantRoPE",
         gemm_cls=GemmSm90,
     )
 )
