@@ -728,6 +728,7 @@ def gemm_rope(
     _, N = B.shape
     assert N % 2 == 0
     assert positions.shape == (M,)
+    assert positions.dtype in (torch.float32, torch.int32, torch.int64)
     assert frequencies.shape == (N,)
     assert frequencies.dtype == torch.float32
     if out is None:
