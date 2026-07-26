@@ -358,7 +358,7 @@ def gemm_qkv_sqsum(
 
 @torch.compile(fullgraph=True, dynamic=False)
 def _lse_reduce_compiled(lses: torch.Tensor, lse_partial: torch.Tensor) -> None:
-    lses.copy_(torch.logsumexp(lse_partial, dim=1))
+    torch.logsumexp(lse_partial, dim=1, out=lses)
 
 
 @autotune(
@@ -852,7 +852,7 @@ def gemm_residual_partial_rmsnorm(
         O=post,
         eps=eps,
     )
-    return post, pre, rstd
+    return pre, post, rstd
 
 
 @torch.compile(fullgraph=True, dynamic=False)
@@ -984,6 +984,113 @@ def gemm_residual_partial_rmsnorm_bwd(
         C_out=post,
     )
     return dX, dW, post
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_swiglu_bwd_zdz_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    ZdZ: torch.Tensor,
+    Z_packed: torch.Tensor,
+    dZ_packed: torch.Tensor,
+    config: GemmConfig,
+) -> None:
+    M, N, _ = D.shape
+    n_tiles = misc_utils.ceil_div(N, config.tile_n)
+    partials = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmSwiGLUBwdZdZ,
+        epi_args={
+            "mZPacked": Z_packed,
+            "mAuxOut": dZ_packed,
+            "mZdZVec": partials,
+        },
+    )
+    _gemm_epilogue_tuned(
+        GemmCls=GemmSwiGLUBwdZdZ,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmSwiGLUBwdZdZ, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+    _sum_reduce_compiled(
+        partials=partials,
+        out=ZdZ,
+        dim=-1,
+    )
+
+
+@_kernel_op("coda::_gemm_swiglu_bwd_zdz", mutates_args=("D", "dZ_packed", "ZdZ"))
+def _gemm_swiglu_bwd_zdz(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    ZdZ: torch.Tensor,
+    Z_packed: torch.Tensor,
+    dZ_packed: torch.Tensor,
+) -> None:
+    _gemm_swiglu_bwd_zdz_tuned(
+        A=A,
+        B=B,
+        D=D,
+        ZdZ=ZdZ,
+        Z_packed=Z_packed,
+        dZ_packed=dZ_packed,
+    )
+
+
+def gemm_swiglu_bwd_zdz(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    Z: torch.Tensor,
+    dX: torch.Tensor | None = None,
+    dZ: torch.Tensor | None = None,
+    ZdZ: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    N, _ = B.shape
+    assert Z.shape == (M, 2 * N)
+    assert Z.dtype == A.dtype
+    if dX is None:
+        dX = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if dZ is None:
+        dZ = torch.empty(M, 2 * N, dtype=A.dtype, device=A.device)
+    if ZdZ is None:
+        ZdZ = torch.empty(M, dtype=torch.float32, device=A.device)
+
+    # Transpose B for GEMM (we want A @ B.T)
+    B_T = B.mT
+
+    Z_packed = Z.view(dtype=torch.int32)
+    dZ_packed = dZ.view(dtype=torch.int32)
+
+    A, B_T, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B_T,
+        D=dX,
+        C=None,
+    )
+    _gemm_swiglu_bwd_zdz(
+        A=A,
+        B=B_T,
+        D=D,
+        ZdZ=ZdZ,
+        Z_packed=Z_packed,
+        dZ_packed=dZ_packed,
+    )
+    return dX, dZ, ZdZ
 
 
 @autotune(
