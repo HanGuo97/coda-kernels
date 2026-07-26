@@ -58,7 +58,7 @@ def block_pre_backward(
     return dx_out, dw, dwn
 
 
-class LayerPre(torch.autograd.Function):
+class BlockPre(torch.autograd.Function):
 
     @staticmethod
     @input_guard
@@ -68,35 +68,29 @@ class LayerPre(torch.autograd.Function):
         x: torch.Tensor,
         w: torch.Tensor,
         wn: torch.Tensor,
-        cos_sin: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
+        positions: torch.Tensor,
+        frequencies: torch.Tensor,
         num_heads: int,
-        head_dim: int,
         eps: float,
-        transpose: bool,
-        backend: str,
-        use_compile: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-
-        y, z, rstd = layer_pre_forward_tunable(
+        qkv, rstd = block_pre_forward(
             x=x,
             w=w,
             wn=wn,
-            cos_sin=cos_sin,
+            positions=positions,
+            frequencies=frequencies,
             eps=eps,
-            transpose=transpose,
-            backend=backend,
-            use_compile=use_compile,
         )
-
-        ctx.save_for_backward(w, wn, x, z, rstd, cos_sin, cos, sin)
-        ctx.num_heads = num_heads
-        ctx.head_dim = head_dim
-        ctx.transpose = transpose
-        ctx.backend = backend
-        ctx.use_compile = use_compile
-        return x, y
+        ctx.save_for_backward(
+            x,
+            w,
+            wn,
+            qkv,
+            rstd,
+            positions,
+            frequencies,
+        )
+        return x, qkv
 
     @staticmethod
     @input_guard
@@ -105,38 +99,25 @@ class LayerPre(torch.autograd.Function):
         ctx,
         dx: torch.Tensor,
         dy: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None, None, None, None, None]:
-        w, wn, x, z, rstd, cos_sin, cos, sin = ctx.saved_tensors
-
-        dx_out, dw, dwn = layer_pre_backward_tunable(
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None]:
+        x, w, wn, qkv, rstd, positions, frequencies = ctx.saved_tensors
+        dx_out, dw, dwn = block_pre_backward(
             dx=dx,
             dy=dy,
+            x=x,
             w=w,
             wn=wn,
-            x=x,
-            z=z,
+            qkv=qkv,
             rstd=rstd,
-            cos_sin=cos_sin,
-            cos=cos,
-            sin=sin,
-            num_heads=ctx.num_heads,
-            head_dim=ctx.head_dim,
-            transpose=ctx.transpose,
-            backend=ctx.backend,
-            use_compile=ctx.use_compile,
+            positions=positions,
+            frequencies=frequencies,
         )
-
         return (
             dx_out,
             dw,
             dwn,
-            None,  # cos_sin
-            None,  # cos
-            None,  # sin
+            None,  # positions
+            None,  # frequencies
             None,  # num_heads
-            None,  # head_dim
             None,  # eps
-            None,  # transpose
-            None,  # backend
-            None,  # use_compile
         )
