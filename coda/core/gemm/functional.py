@@ -1,7 +1,10 @@
+import math
 import torch
+from einops import rearrange
 from quack.gemm_config import GemmConfig
 from quack.gemm_interface import gemm as quack_gemm
 from quack.cross_entropy import cross_entropy_fwd_out
+from quack.rms_final_reduce import _rms_final_reduce_out
 from quack.autotuner import autotune, AutotuneConfig
 
 from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
@@ -15,11 +18,19 @@ from coda.core.gemm.gemm_interface import (
 
 from coda.core.ops import misc_utils
 from coda.core.gemm.registry import (
-    GemmLSE,
-    GemmRoPE,
+    GemmScale,
     GemmSwiGLU,
-    GemmQKVSqSum,
+    GemmScaleSwiGLU,
+    GemmSwiGLUBwdZdZ,
+    GemmRoPE,
+    GemmRoPEAux,
+    GemmScaleRoPEAux,
+    GemmLSE,
+    GemmScaleLSE,
     GemmLSESelectLogits,
+    GemmQKVSqSum,
+    GemmResidualSqSumScaledAux,
+    GemmResidualRMSNormBwd,
 )
 
 
@@ -550,3 +561,191 @@ def gemm_lse_select_logits(
         ignore_index=ignore_index,
     )
     return losses, lses, target_logits
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_rmsnorm_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    R: torch.Tensor,
+    config: GemmConfig,
+) -> None:
+    epi_args = {
+        "mColVecBroadcast": R,
+    }
+    _gemm_epilogue_tuned(
+        GemmCls=GemmScale,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmScale, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+
+
+@_kernel_op("coda::_gemm_rmsnorm", mutates_args=("D",))
+def _gemm_rmsnorm(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    R: torch.Tensor,
+) -> None:
+    _gemm_rmsnorm_tuned(
+        A=A,
+        B=B,
+        D=D,
+        R=R,
+    )
+
+
+def gemm_rmsnorm(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    R: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    M, _ = A.shape
+    _, N = B.shape
+    assert R.shape == (M,)
+    assert R.dtype == torch.float32
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    A, B, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=out,
+        C=None,
+    )
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmScale,
+        epi_args={
+            "mColVecBroadcast": R,
+        },
+    )
+    _gemm_rmsnorm(
+        A=A,
+        B=B,
+        D=D,
+        R=epi_args["mColVecBroadcast"],
+    )
+    return out
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_residual_rmsnorm_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    D: torch.Tensor,
+    W: torch.Tensor,
+    R: torch.Tensor,
+    O: torch.Tensor,
+    eps: float,
+    config: GemmConfig,
+) -> None:
+    M, N, _ = D.shape
+    n_tiles = misc_utils.ceil_div(N, config.tile_n)
+    partials = torch.empty(M, n_tiles, dtype=torch.float32, device=A.device)
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmResidualSqSumScaledAux,
+        epi_args={
+            "mSqSumVec": partials,
+            "mRowVecScale": W,
+            "mAuxOut": O,
+        },
+    )
+    _gemm_epilogue_tuned(
+        GemmCls=GemmResidualSqSumScaledAux,
+        A=A,
+        B=B,
+        D=D,
+        C=C,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmResidualSqSumScaledAux, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+    _rms_final_reduce_out(
+        x=partials,
+        rstd=R,
+        scale=1.0 / N,
+        eps=eps,
+    )
+
+
+@_kernel_op("coda::_gemm_residual_rmsnorm", mutates_args=("D", "R", "O"))
+def _gemm_residual_rmsnorm(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    D: torch.Tensor,
+    W: torch.Tensor,
+    R: torch.Tensor,
+    O: torch.Tensor,
+    eps: float,
+) -> None:
+    _gemm_residual_rmsnorm_tuned(
+        A=A,
+        B=B,
+        C=C,
+        D=D,
+        W=W,
+        R=R,
+        O=O,
+        eps=eps,
+    )
+
+
+def gemm_residual_rmsnorm(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    W: torch.Tensor,
+    eps: float,
+    rstd: torch.Tensor | None = None,
+    pre_scale: torch.Tensor | None = None,
+    post_scale: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    M, _ = A.shape
+    _, N = B.shape
+    if rstd is None:
+        rstd = torch.empty(M, dtype=torch.float32, device=A.device)
+    if pre_scale is None:
+        pre_scale = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if post_scale is None:
+        post_scale = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    A, B, D, C = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=pre_scale,
+        C=C,
+    )
+    _gemm_residual_rmsnorm(
+        A=A,
+        B=B,
+        C=C,
+        D=D,
+        W=W,
+        R=rstd,
+        O=post_scale,
+        eps=eps,
+    )
+    return pre_scale, rstd, post_scale
