@@ -1,3 +1,33 @@
+import torch
+from einops import rearrange
+from quack.rms_final_reduce import rms_final_reduce as quack_rms_final_reduce
+from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
+
+from coda.core.elementwise.functional import (
+    cross_entropy_fwd_bwd,
+    rope_bwd_zdz,
+)
+from coda.core.gemm.functional import (
+    gemm as coda_gemm,
+    gemm_scalar_scale,
+    gemm_lse,
+    gemm_residual_partial_rmsnorm,
+    gemm_residual_partial_rmsnorm_bwd,
+    gemm_rmsnorm_rope,
+    gemm_rmsnorm_swiglu,
+    gemm_swiglu_bwd_zdz,
+)
+
+USE_CODA_GEMM = False
+
+
+def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    if USE_CODA_GEMM:
+        return coda_gemm(A=A, B=B)
+    else:
+        return torch.matmul(A, B)
+
+
 def block_pre_forward(
     x: torch.Tensor,
     w: torch.Tensor,
