@@ -151,3 +151,105 @@ class BlockPre(torch.autograd.Function):
             None,  # num_heads
             None,  # eps
         )
+
+
+def layer_pre(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    wn: torch.Tensor,
+    cos_sin: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_heads: int,
+    head_dim: int,
+    eps: float,
+    transpose: bool,
+    backend: str,
+    use_compile: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return LayerPre.apply(
+        x,
+        w,
+        wn,
+        cos_sin,
+        cos,
+        sin,
+        num_heads,
+        head_dim,
+        eps,
+        transpose,
+        backend,
+        use_compile,
+    )
+
+
+def layer_post(
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    targets: torch.Tensor,
+    eps: float,
+    transpose: bool,
+    backend: str,
+    use_compile: bool,
+) -> torch.Tensor:
+    return LayerPost.apply(
+        x0,
+        y0,
+        w0,
+        w1,
+        w2,
+        w3,
+        wn0,
+        wn1,
+        targets,
+        eps,
+        transpose,
+        backend,
+        use_compile,
+    )
+
+
+def layer(
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    cos_sin: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_heads: int,
+    head_dim: int,
+    eps: float,
+    transpose: bool,
+    backend: str,
+    use_compile: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return Layer.apply(
+        x0,
+        y0,
+        w0,
+        w1,
+        w2,
+        w3,
+        wn0,
+        wn1,
+        cos_sin,
+        cos,
+        sin,
+        num_heads,
+        head_dim,
+        eps,
+        transpose,
+        backend,
+        use_compile,
+    )
