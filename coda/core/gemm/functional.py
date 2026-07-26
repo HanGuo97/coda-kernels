@@ -18,6 +18,7 @@ from coda.core.gemm.gemm_interface import (
 from coda.core.ops import misc_utils
 from coda.core.gemm.registry import (
     GemmScale,
+    GemmScalarScale,
     GemmSwiGLU,
     GemmScaleSwiGLU,
     GemmSwiGLUBwdZdZ,
@@ -47,36 +48,106 @@ def _gemm_tuned(
     A: torch.Tensor,
     B: torch.Tensor,
     out: torch.Tensor,
-    alpha: torch.Tensor | None,
     backend: str,
 ) -> None:
     if backend == "quack":
-        if alpha is None:
-            quack_gemm(A=A, B=B, out=out, tuned=True)
-        else:
-            quack_gemm(A=A, B=B, out=out, alpha=alpha, tuned=True)
+        quack_gemm(A=A, B=B, out=out, tuned=True)
     else:
         torch.matmul(A, B, out=out)
-        if alpha is not None:
-            out.mul_(alpha)
 
 
 @_kernel_op("coda::_gemm", mutates_args=("out",))
-def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor, alpha: torch.Tensor | None) -> None:
-    _gemm_tuned(A=A, B=B, out=out, alpha=alpha)
+def _gemm(A: torch.Tensor, B: torch.Tensor, out: torch.Tensor) -> None:
+    _gemm_tuned(A=A, B=B, out=out)
 
 
 def gemm(
     A: torch.Tensor,
     B: torch.Tensor,
     out: torch.Tensor | None = None,
-    alpha: torch.Tensor | None = None,
 ) -> torch.Tensor:
     M, _ = A.shape
     _, N = B.shape
     if out is None:
         out = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    _gemm(A=A, B=B, out=out, alpha=alpha)
+    _gemm(A=A, B=B, out=out)
+    return out
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_scalar_scale_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    alpha: torch.Tensor,
+    config: GemmConfig,
+) -> None:
+    epi_args = {
+        "alpha": alpha,
+    }
+    _gemm_epilogue_tuned(
+        GemmCls=GemmScalarScale,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmScalarScale, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+
+
+@_kernel_op("coda::_gemm_scalar_scale", mutates_args=("D",))
+def _gemm_scalar_scale(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    alpha: torch.Tensor,
+) -> None:
+    _gemm_scalar_scale_tuned(
+        A=A,
+        B=B,
+        D=D,
+        alpha=alpha,
+    )
+
+
+def gemm_scalar_scale(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    alpha: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    M, _ = A.shape
+    _, N = B.shape
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    A, B, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=out,
+        C=None,
+    )
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmScalarScale,
+        epi_args={
+            "alpha": alpha,
+        },
+    )
+    _gemm_scalar_scale(
+        A=A,
+        B=B,
+        D=D,
+        alpha=epi_args["alpha"],
+    )
     return out
 
 
@@ -855,7 +926,7 @@ def gemm_residual_partial_rmsnorm(
     return pre, post, rstd
 
 
-@torch.compile(fullgraph=True, dynamic=False)
+# @torch.compile(fullgraph=True, dynamic=False)
 def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int) -> None:
     torch.sum(partials, dim=dim, out=out)
 
