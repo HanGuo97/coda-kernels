@@ -1,6 +1,4 @@
-import math
 import torch
-from einops import rearrange
 from quack.gemm_config import GemmConfig
 from quack.gemm_interface import gemm as quack_gemm
 from quack.cross_entropy import cross_entropy_fwd_out
@@ -159,90 +157,6 @@ def gemm_swiglu(
         post_act=epi_args["mAuxOut"],
     )
     return pre_act, post_act
-
-
-@autotune(
-    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
-    prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
-)
-def _gemm_rope_tuned(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    D: torch.Tensor,
-    pos: torch.Tensor,
-    freq: torch.Tensor,
-    config: GemmConfig,
-) -> None:
-    epi_args = {
-        "mPos": pos,
-        "mFreq": freq,
-    }
-    _gemm_epilogue_tuned(
-        GemmCls=GemmRoPE,
-        A=A,
-        B=B,
-        D=D,
-        C=None,
-        epi_args=epi_args,
-        epi_keys=make_epi_keys(GemmRoPE, epi_args),
-        pin_tile_M=None,
-        pin_tile_N=None,
-        batch_idx_permute=None,
-        add_to_output=False,
-        config=config,
-    )
-
-
-@_kernel_op("coda::_gemm_rope", mutates_args=("D",))
-def _gemm_rope(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    D: torch.Tensor,
-    pos: torch.Tensor,
-    freq: torch.Tensor,
-) -> None:
-    _gemm_rope_tuned(
-        A=A,
-        B=B,
-        D=D,
-        pos=pos,
-        freq=freq,
-    )
-
-
-def gemm_rope(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    pos: torch.Tensor,
-    freq: torch.Tensor,
-    out: torch.Tensor | None = None,
-) -> torch.Tensor:
-    M, _ = A.shape
-    _, N = B.shape
-    if out is None:
-        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    A, B, D, _ = _preprocess_gemm_operands(
-        A=A,
-        B=B,
-        D=out,
-        C=None,
-    )
-    epi_args = preprocess_epi_args(
-        GemmCls=GemmRoPE,
-        epi_args={
-            "mPos": pos,
-            "mFreq": freq,
-        },
-    )
-    _gemm_rope(
-        A=A,
-        B=B,
-        D=D,
-        pos=epi_args["mPos"],
-        freq=epi_args["mFreq"],
-    )
-    return out
 
 
 # a head spans at most ceil(head_dim / tile_n) + 1 tiles; size ssq for the narrowest sm90 tile
@@ -720,22 +634,24 @@ def gemm_residual_rmsnorm(
     C: torch.Tensor,
     W: torch.Tensor,
     eps: float,
+    pre: torch.Tensor | None = None,
+    post: torch.Tensor | None = None,
     rstd: torch.Tensor | None = None,
-    pre_scale: torch.Tensor | None = None,
-    post_scale: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     _, N = B.shape
+    assert C.shape == (M, N)
+    assert W.shape == (N,)
+    if pre is None:
+        pre = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    if post is None:
+        post = torch.empty(M, N, dtype=A.dtype, device=A.device)
     if rstd is None:
         rstd = torch.empty(M, dtype=torch.float32, device=A.device)
-    if pre_scale is None:
-        pre_scale = torch.empty(M, N, dtype=A.dtype, device=A.device)
-    if post_scale is None:
-        post_scale = torch.empty(M, N, dtype=A.dtype, device=A.device)
     A, B, D, C = _preprocess_gemm_operands(
         A=A,
         B=B,
-        D=pre_scale,
+        D=pre,
         C=C,
     )
     _gemm_residual_rmsnorm(
@@ -745,7 +661,95 @@ def gemm_residual_rmsnorm(
         D=D,
         W=W,
         R=rstd,
-        O=post_scale,
+        O=post,
         eps=eps,
     )
-    return pre_scale, rstd, post_scale
+    return pre, post, rstd
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
+    prune_configs_by={"early_config_prune": prune_gemm_configs},
+    cache_results=False,
+)
+def _gemm_rope_tuned(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    config: GemmConfig,
+) -> None:
+    epi_args = {
+        "mPos": pos,
+        "mFreq": freq,
+    }
+    _gemm_epilogue_tuned(
+        GemmCls=GemmRoPE,
+        A=A,
+        B=B,
+        D=D,
+        C=None,
+        epi_args=epi_args,
+        epi_keys=make_epi_keys(GemmRoPE, epi_args),
+        pin_tile_M=None,
+        pin_tile_N=None,
+        batch_idx_permute=None,
+        add_to_output=False,
+        config=config,
+    )
+
+
+@_kernel_op("coda::_gemm_rope", mutates_args=("D",))
+def _gemm_rope(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    D: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+) -> None:
+    _gemm_rope_tuned(
+        A=A,
+        B=B,
+        D=D,
+        pos=pos,
+        freq=freq,
+    )
+
+
+def gemm_rope(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    M, _ = A.shape
+    _, N = B.shape
+    assert N % 2 == 0
+    assert positions.shape == (M,)
+    assert frequencies.shape == (N,)
+    assert frequencies.dtype == torch.float32
+    if out is None:
+        out = torch.empty(M, N, dtype=A.dtype, device=A.device)
+    A, B, D, _ = _preprocess_gemm_operands(
+        A=A,
+        B=B,
+        D=out,
+        C=None,
+    )
+    epi_args = preprocess_epi_args(
+        GemmCls=GemmRoPE,
+        epi_args={
+            "mPos": positions,
+            "mFreq": frequencies,
+        },
+    )
+    _gemm_rope(
+        A=A,
+        B=B,
+        D=D,
+        pos=epi_args["mPos"],
+        freq=epi_args["mFreq"],
+    )
+    return out
