@@ -57,6 +57,35 @@ class Affine(Epilogue):
         return ()
 
 
+class ScalarScale(Epilogue):
+
+    def __init__(self, name: str | None = None) -> None:
+        if name is not None:
+            self.name = name
+        else:
+            self.name = "alpha"
+
+    def declares(self) -> tuple[EpiOp, ...]:
+        return (Scalar(self.name),)
+
+    @cute.jit
+    def visit(
+        self,
+        gemm: GemmSm90,
+        params: ParamsBase,
+        epi_loop_tensors: dict,
+        tRS_rD: cute.Tensor,
+        tRS_rC: cute.Tensor | None,
+    ) -> tuple[cute.Tensor, ...]:
+        if cutlass.const_expr(hasattr(params, "alpha") and params.alpha is not None):
+            rD = tRS_rD.load()
+            alpha = quack_utils.load_scalar_or_pointer(params.alpha)
+            rD *= alpha
+            tRS_rD.store(rD)
+
+        return ()
+
+
 class Scale(Epilogue):
 
     def __init__(
