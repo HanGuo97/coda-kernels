@@ -31,7 +31,7 @@ def _forward_lse(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if use_cutedsl:
         logits, lses = gemm_lse(x, weight.mT)
-        losses = cross_entropy_fwd_bwd(
+        losses, _ = cross_entropy_fwd_bwd(
             logits=logits,
             lses=lses,
             target=target,
