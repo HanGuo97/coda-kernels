@@ -19,6 +19,7 @@ from coda.core.ops import misc_utils
 from coda.core.gemm.registry import (
     GemmScale,
     GemmScalarScale,
+    GemmScalarScaleResidualRMSNormBwd,
     GemmSwiGLU,
     GemmScaleSwiGLU,
     GemmSwiGLUBwdZdZ,
@@ -29,7 +30,6 @@ from coda.core.gemm.registry import (
     GemmLSESelectLogits,
     GemmQKVSqSum,
     GemmResidualSqSumScaledAux,
-    GemmResidualRMSNormBwd,
 )
 
 _DEVICE_CAPACITY = 9
@@ -946,13 +946,23 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
     dW: torch.Tensor,
     ZdZ: torch.Tensor,
     C_out: torch.Tensor,
+    alpha: torch.Tensor | None,
+    accumulate: bool,
     config: GemmConfig,
 ) -> None:
     M, N, _ = D.shape
     m_tiles = misc_utils.ceil_div(M, config.tile_m)
     partials = torch.empty(m_tiles, N, dtype=torch.float32, device=A.device)
+
+    if alpha is not None:
+        # for `ScalarScale` we need to omit `alpha` when it's None
+        # due to artifacts of our epi-lowering
+        extra_epi_args = {"alpha": alpha}
+    else:
+        extra_epi_args = {}
+
     epi_args = preprocess_epi_args(
-        GemmCls=GemmResidualRMSNormBwd,
+        GemmCls=GemmScalarScaleResidualRMSNormBwd,
         epi_args={
             "mColVecR": R,
             "mColVecZdZ": ZdZ,
@@ -960,21 +970,21 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
             "mMatrixC": C,
             "mAuxOut": C_out,
             "mDWVec": partials,
+            **extra_epi_args,
         },
     )
     _gemm_epilogue_tuned(
-        GemmCls=GemmResidualRMSNormBwd,
+        GemmCls=GemmScalarScaleResidualRMSNormBwd,
         A=A,
         B=B,
         D=D,
         C=None,
         epi_args=epi_args,
-        epi_keys=make_epi_keys(GemmResidualRMSNormBwd, epi_args),
+        epi_keys=make_epi_keys(GemmScalarScaleResidualRMSNormBwd, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
         batch_idx_permute=None,
-        # accumulate
-        add_to_output=True,
+        add_to_output=accumulate,
         config=config,
     )
     _sum_reduce_compiled(
@@ -995,6 +1005,8 @@ def _gemm_residual_partial_rmsnorm_bwd(
     dW: torch.Tensor,
     ZdZ: torch.Tensor,
     C_out: torch.Tensor,
+    alpha: torch.Tensor | None,
+    accumulate: bool,
 ) -> None:
     _gemm_residual_partial_rmsnorm_bwd_tuned(
         A=A,
@@ -1006,6 +1018,8 @@ def _gemm_residual_partial_rmsnorm_bwd(
         dW=dW,
         ZdZ=ZdZ,
         C_out=C_out,
+        alpha=alpha,
+        accumulate=accumulate,
     )
 
 
@@ -1013,22 +1027,28 @@ def gemm_residual_partial_rmsnorm_bwd(
     A: torch.Tensor,
     B: torch.Tensor,
     W: torch.Tensor,
-    dX: torch.Tensor,
     pre: torch.Tensor,
     ZdZ: torch.Tensor,
     rstd: torch.Tensor,
+    alpha: torch.Tensor | None = None,
+    dX: torch.Tensor | None = None,
     dW: torch.Tensor | None = None,
     post: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     M, _ = A.shape
     N, _ = B.shape
     assert W.shape == (N,)
-    assert dX.shape == (M, N)
     assert pre.shape == (M, N)
     assert ZdZ.shape == (M,)
     assert ZdZ.dtype == torch.float32
     assert rstd.shape == (M,)
     assert rstd.dtype == torch.float32
+    if dX is None:
+        dX = torch.empty(M, N, dtype=A.dtype, device=A.device)
+        accumulate = False
+    else:
+        assert dX.shape == (M, N)
+        accumulate = True
     if dW is None:
         dW = torch.empty(N, dtype=torch.float32, device=A.device)
     if post is None:
@@ -1053,6 +1073,8 @@ def gemm_residual_partial_rmsnorm_bwd(
         dW=dW,
         ZdZ=ZdZ,
         C_out=post,
+        alpha=alpha,
+        accumulate=accumulate,
     )
     return dX, dW, post
 
@@ -1069,6 +1091,7 @@ def _gemm_swiglu_bwd_zdz_tuned(
     ZdZ: torch.Tensor,
     Z_packed: torch.Tensor,
     dZ_packed: torch.Tensor,
+    scale: float | None,
     config: GemmConfig,
 ) -> None:
     M, N, _ = D.shape
@@ -1080,6 +1103,7 @@ def _gemm_swiglu_bwd_zdz_tuned(
             "mZPacked": Z_packed,
             "mAuxOut": dZ_packed,
             "mZdZVec": partials,
+            "scale": scale,
         },
     )
     _gemm_epilogue_tuned(
@@ -1111,6 +1135,7 @@ def _gemm_swiglu_bwd_zdz(
     ZdZ: torch.Tensor,
     Z_packed: torch.Tensor,
     dZ_packed: torch.Tensor,
+    scale: float | None,
 ) -> None:
     _gemm_swiglu_bwd_zdz_tuned(
         A=A,
@@ -1119,6 +1144,7 @@ def _gemm_swiglu_bwd_zdz(
         ZdZ=ZdZ,
         Z_packed=Z_packed,
         dZ_packed=dZ_packed,
+        scale=scale,
     )
 
 
@@ -1126,6 +1152,7 @@ def gemm_swiglu_bwd_zdz(
     A: torch.Tensor,
     B: torch.Tensor,
     Z: torch.Tensor,
+    scale: float | None = None,
     dZ: torch.Tensor | None = None,
     ZdZ: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
@@ -1161,6 +1188,7 @@ def gemm_swiglu_bwd_zdz(
         ZdZ=ZdZ,
         Z_packed=Z_packed,
         dZ_packed=dZ_packed,
+        scale=scale,
     )
     return dZ, ZdZ, out
 
