@@ -140,7 +140,15 @@ class BlockPre(torch.autograd.Function):
         dx: torch.Tensor,
         dy: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]:
-        x, w, wn, qkv, rstd, positions, frequencies = ctx.saved_tensors
+        (
+            x,
+            w,
+            wn,
+            qkv,
+            rstd,
+            positions,
+            frequencies,
+        ) = ctx.saved_tensors
         dx_out, dw, dwn = block_pre_backward(
             dx=dx,
             dy=dy,
@@ -166,7 +174,7 @@ class BlockPre(torch.autograd.Function):
         )
 
 
-class Layer(torch.autograd.Function):
+class Block(torch.autograd.Function):
 
     @staticmethod
     @input_guard
@@ -181,18 +189,11 @@ class Layer(torch.autograd.Function):
         w3: torch.Tensor,
         wn0: torch.Tensor,
         wn1: torch.Tensor,
-        cos_sin: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        num_heads: int,
-        head_dim: int,
+        positions: torch.Tensor,
+        frequencies: torch.Tensor,
         eps: float,
-        transpose: bool,
-        backend: str,
-        use_compile: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-
-        x1, z1, rstd1, x2, y2, z2, rstd2 = layer_forward_tunable(
+        _ = block_forward(
             x0=x0,
             y0=y0,
             w0=w0,
@@ -201,20 +202,25 @@ class Layer(torch.autograd.Function):
             w3=w3,
             wn0=wn0,
             wn1=wn1,
-            cos_sin=cos_sin,
+            positions=positions,
+            frequencies=frequencies,
             eps=eps,
-            transpose=transpose,
-            backend=backend,
-            use_compile=use_compile,
         )
-
-        ctx.save_for_backward(w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, z2, rstd1, rstd2, cos_sin, cos, sin)
-        ctx.num_heads = num_heads
-        ctx.head_dim = head_dim
-        ctx.transpose = transpose
-        ctx.backend = backend
-        ctx.use_compile = use_compile
-        return x2, y2
+        ctx.save_for_backward(
+            w0,
+            w1,
+            w2,
+            w3,
+            wn0,
+            wn1,
+            x1,
+            x2,
+            rstd1,
+            rstd2,
+            positions,
+            frequencies,
+        )
+        return x2, qkv
 
     @staticmethod
     @input_guard
@@ -223,10 +229,22 @@ class Layer(torch.autograd.Function):
         ctx,
         dx2: torch.Tensor,
         dy2: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None, None, None, None, None]:
-        w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, z2, rstd1, rstd2, cos_sin, cos, sin = ctx.saved_tensors
-
-        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = layer_backward_tunable(
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None]:
+        (
+            w0,
+            w1,
+            w2,
+            w3,
+            wn0,
+            wn1,
+            x1,
+            x2,
+            rstd1,
+            rstd2,
+            positions,
+            frequencies,
+        ) = ctx.saved_tensors
+        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = block_backward(
             dx2=dx2,
             dy2=dy2,
             w0=w0,
@@ -237,21 +255,11 @@ class Layer(torch.autograd.Function):
             wn1=wn1,
             x1=x1,
             x2=x2,
-            y0=y0,
-            z1=z1,
-            z2=z2,
             rstd1=rstd1,
             rstd2=rstd2,
-            cos_sin=cos_sin,
-            cos=cos,
-            sin=sin,
-            num_heads=ctx.num_heads,
-            head_dim=ctx.head_dim,
-            transpose=ctx.transpose,
-            backend=ctx.backend,
-            use_compile=ctx.use_compile,
+            positions=positions,
+            frequencies=frequencies,
         )
-
         return (
             dx0,
             dy0,
@@ -261,15 +269,9 @@ class Layer(torch.autograd.Function):
             dw3,
             dwn0,
             dwn1,
-            None,  # cos_sin
-            None,  # cos
-            None,  # sin
-            None,  # num_heads
-            None,  # head_dim
+            None,  # positions
+            None,  # frequencies
             None,  # eps
-            None,  # transpose
-            None,  # backend
-            None,  # use_compile
         )
 
 
