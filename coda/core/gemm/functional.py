@@ -953,14 +953,12 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
     M, N, _ = D.shape
     m_tiles = misc_utils.ceil_div(M, config.tile_m)
     partials = torch.empty(m_tiles, N, dtype=torch.float32, device=A.device)
-
     if alpha is not None:
-        # for `ScalarScale` we need to omit `alpha` when it's None
-        # due to artifacts of our epi-lowering
         extra_epi_args = {"alpha": alpha}
     else:
+        # for `ScalarScale` we need to omit `alpha` when it's None
+        # due to artifacts of our epi-lowering
         extra_epi_args = {}
-
     epi_args = preprocess_epi_args(
         GemmCls=GemmScalarScaleResidualRMSNormBwd,
         epi_args={
@@ -1044,11 +1042,11 @@ def gemm_residual_partial_rmsnorm_bwd(
     assert rstd.shape == (M,)
     assert rstd.dtype == torch.float32
     if dX is None:
-        dX = torch.empty(M, N, dtype=A.dtype, device=A.device)
         accumulate = False
+        dX = torch.empty(M, N, dtype=A.dtype, device=A.device)
     else:
-        assert dX.shape == (M, N)
         accumulate = True
+        assert dX.shape == (M, N)
     if dW is None:
         dW = torch.empty(N, dtype=torch.float32, device=A.device)
     if post is None:
