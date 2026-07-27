@@ -162,6 +162,97 @@ class BlockPre(torch.autograd.Function):
         )
 
 
+class LayerPost(torch.autograd.Function):
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_fwd
+    def forward(
+        ctx,
+        x0: torch.Tensor,
+        y0: torch.Tensor,
+        w0: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        w3: torch.Tensor,
+        wn0: torch.Tensor,
+        wn1: torch.Tensor,
+        targets: torch.Tensor,
+        eps: float,
+        transpose: bool,
+        backend: str,
+        use_compile: bool,
+    ) -> torch.Tensor:
+
+        x1, z1, rstd1, x2, rstd2, loss, dlogits, zdz2 = layer_post_forward_tunable(
+            x0=x0,
+            y0=y0,
+            w0=w0,
+            w1=w1,
+            w2=w2,
+            w3=w3,
+            wn0=wn0,
+            wn1=wn1,
+            targets=targets,
+            eps=eps,
+            transpose=transpose,
+            backend=backend,
+            use_compile=use_compile,
+        )
+
+        ctx.save_for_backward(w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, rstd1, rstd2, dlogits, zdz2)
+        ctx.transpose = transpose
+        ctx.backend = backend
+        ctx.use_compile = use_compile
+        return loss
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_bwd
+    def backward(
+        ctx,
+        dloss: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]:
+        w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, rstd1, rstd2, dlogits, zdz2 = ctx.saved_tensors
+
+        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = layer_post_backward_tunable(
+            dloss=dloss,
+            dlogits=dlogits,
+            zdz2=zdz2,
+            w0=w0,
+            w1=w1,
+            w2=w2,
+            w3=w3,
+            wn0=wn0,
+            wn1=wn1,
+            x1=x1,
+            x2=x2,
+            y0=y0,
+            z1=z1,
+            rstd1=rstd1,
+            rstd2=rstd2,
+            transpose=ctx.transpose,
+            backend=ctx.backend,
+            use_compile=ctx.use_compile,
+        )
+
+        return (
+            dx0,
+            dy0,
+            dw0,
+            dw1,
+            dw2,
+            dw3,
+            dwn0,
+            dwn1,
+            None,  # targets
+            None,  # eps
+            None,  # transpose
+            None,  # backend
+            None,  # use_compile
+        )
+
+
 class Block(torch.autograd.Function):
 
     @staticmethod
