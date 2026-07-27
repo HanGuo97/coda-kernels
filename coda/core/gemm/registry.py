@@ -177,32 +177,32 @@ GemmResidualRMSNormBwd = (
     )
 )
 
-GemmDequantSwiGLU = (
+GemmScalarScaleSwiGLU = (
     compose(
         [
-            ScalarScale(name="dequant"),
+            ScalarScale(),
             Gated(
                 fn=gate_fn_map["swiglu"],
             ),
         ]
     )
     .bind(
-        name="GemmDequantSwiGLU",
+        name="GemmScalarScaleSwiGLU",
         gemm_cls=GemmSm90,
     )
 )
 
-GemmDequantRoPE = (
+GemmScalarScaleRoPE = (
     compose(
         [
-            ScalarScale(name="dequant"),
+            ScalarScale(),
             RoPE(
                 auxiliary_store=False,
             ),
         ]
     )
     .bind(
-        name="GemmDequantRoPE",
+        name="GemmScalarScaleRoPE",
         gemm_cls=GemmSm90,
     )
 )
