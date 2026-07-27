@@ -19,6 +19,7 @@ from coda.core.gemm.functional import (
 )
 
 USE_CODA_GEMM = False
+ALLOW_INPLACE_GRAD_OUTPUT = False
 
 
 def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
@@ -60,10 +61,12 @@ def block_pre_backward(
     x: torch.Tensor,
     w: torch.Tensor,
     wn: torch.Tensor,
-    rstd: torch.Tensor,
     qkv: torch.Tensor,
+    rstd: torch.Tensor,
     positions: torch.Tensor,
     frequencies: torch.Tensor,
+    num_heads: int,
+    head_dim: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # y = R z and dz = R^T dy, hence
     # sum(z * dz) = z^T R^T dy = (R z)^T dy = sum(y * dy).
@@ -72,14 +75,18 @@ def block_pre_backward(
         dy=dy,
         pos=positions,
         freq=frequencies,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        scale=1.0 / x.shape[1],
     )
+    dx_out = dx if ALLOW_INPLACE_GRAD_OUTPUT else dx.clone()
     dx_out, dwn, x_out = gemm_residual_partial_rmsnorm_bwd(
         A=dz,
         # TODO: the function itself also transposes `B`
         # maybe we can directly pass in `BT` there
         B=w.mT,
         W=wn,
-        dX=dx,
+        dX=dx_out,
         pre=x,
         ZdZ=zdz,
         rstd=rstd,
@@ -101,6 +108,7 @@ class BlockPre(torch.autograd.Function):
         positions: torch.Tensor,
         frequencies: torch.Tensor,
         num_heads: int,
+        head_dim: int,
         eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         qkv, rstd = block_pre_forward(
@@ -118,8 +126,10 @@ class BlockPre(torch.autograd.Function):
             qkv,
             rstd,
             positions,
-            frequencies,
+            frequencies[:head_dim],
         )
+        ctx.num_heads = num_heads
+        ctx.head_dim = head_dim
         return x, qkv
 
     @staticmethod
@@ -129,7 +139,7 @@ class BlockPre(torch.autograd.Function):
         ctx,
         dx: torch.Tensor,
         dy: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]:
         x, w, wn, qkv, rstd, positions, frequencies = ctx.saved_tensors
         dx_out, dw, dwn = block_pre_backward(
             dx=dx,
@@ -141,6 +151,8 @@ class BlockPre(torch.autograd.Function):
             rstd=rstd,
             positions=positions,
             frequencies=frequencies,
+            num_heads=ctx.num_heads,
+            head_dim=ctx.head_dim,
         )
         return (
             dx_out,
@@ -149,6 +161,7 @@ class BlockPre(torch.autograd.Function):
             None,  # positions
             None,  # frequencies
             None,  # num_heads
+            None,  # head_dim
             None,  # eps
         )
 
@@ -160,6 +173,7 @@ def block_pre(
     positions: torch.Tensor,
     frequencies: torch.Tensor,
     num_heads: int,
+    head_dim: int,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch, length, _ = x.shape
@@ -181,6 +195,7 @@ def block_pre(
         positions,
         frequencies,
         num_heads,
+        head_dim,
         eps,
     )
     return (
@@ -204,7 +219,24 @@ def block_post(
     reduction: str = "mean",
 ) -> torch.Tensor:
     batch, length, _ = x0.shape
+    dim0, _ = w0.shape
+    dim1, _ = w1.shape
+    dim3, _ = w3.shape
+    assert x0.shape == (batch, length, dim0)
+    assert x0.dtype in (torch.float16, torch.bfloat16)
+    assert y0.shape == (batch, length, dim0)
+    assert y0.dtype == x0.dtype
+    assert w0.shape == (dim0, dim0)
+    assert w0.dtype == x0.dtype
+    assert w1.shape == (dim1, dim0)
+    assert w1.dtype == x0.dtype
+    assert w2.shape == (dim0, dim1 // 2)
+    assert w2.dtype == x0.dtype
+    assert w3.shape == (dim3, dim0)
+    assert w3.dtype == x0.dtype
+    assert wn0.shape == (dim0,)
     assert wn0.dtype == x0.dtype
+    assert wn1.shape == (dim0,)
     assert wn1.dtype == x0.dtype
     assert targets.shape == (batch * length,)
     assert targets.dtype == torch.int32
@@ -237,13 +269,32 @@ def block(
     positions: torch.Tensor,
     frequencies: torch.Tensor,
     num_heads: int,
+    head_dim: int,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch, length, _ = x0.shape
+    dim0, _ = w0.shape
+    dim1, _ = w1.shape
+    dim3, _ = w3.shape
+    assert x0.shape == (batch, length, dim0)
+    assert x0.dtype in (torch.float16, torch.bfloat16)
+    assert y0.shape == (batch, length, dim0)
+    assert y0.dtype == x0.dtype
+    assert w0.shape == (dim0, dim0)
+    assert w0.dtype == x0.dtype
+    assert w1.shape == (dim1, dim0)
+    assert w1.dtype == x0.dtype
+    assert w2.shape == (dim0, dim1 // 2)
+    assert w2.dtype == x0.dtype
+    assert w3.shape == (dim3, dim0)
+    assert w3.dtype == x0.dtype
+    assert wn0.shape == (dim0,)
     assert wn0.dtype == x0.dtype
+    assert wn1.shape == (dim0,)
     assert wn1.dtype == x0.dtype
     assert positions.shape == (batch * length,)
     assert positions.dtype in (torch.float32, torch.int32)
+    assert frequencies.shape == (dim3,)
     assert frequencies.dtype == torch.float32
     residual, qkv = Block.apply(
         rearrange(x0, "b t d -> (b t) d"),
@@ -257,6 +308,7 @@ def block(
         positions,
         frequencies,
         num_heads,
+        head_dim,
         eps,
     )
     return (
