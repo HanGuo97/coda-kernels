@@ -7,8 +7,8 @@ from quack.epi_ops import EpiOp, ColVecLoad, RowVecLoad, TileStore
 from quack.gemm_act import GemmActMixin, GemmGatedMixin, _gated_epi_tile_fn
 from quack.gemm_sm90 import GemmSm90
 
-from coda.core.ops import math_utils
 from coda.core.ops import creation_utils
+from coda.core.ops import math_utils
 from coda.core.epilogue.base import Epilogue
 
 
@@ -160,6 +160,9 @@ class RoPE(Epilogue):
                 tRS_rAuxOut = tRS_rD
 
             for i in cutlass.range_constexpr(cute.size(tRS_rD) // 2):
+                # pos broadcasts along the row, so both halves of the pair share
+                # it; freq varies along the row and carries the turns-based
+                # frequency as a (hi, lo) float-float pair, not a duplicate
                 s, c = math_utils.rope_pos_freq(
                     pos=rPos[2 * i].to(dtype=cute.Float32),
                     freq_hi=rFreq[2 * i].to(dtype=cute.Float32),
