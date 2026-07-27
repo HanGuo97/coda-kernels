@@ -65,8 +65,6 @@ def block_pre_backward(
     rstd: torch.Tensor,
     positions: torch.Tensor,
     frequencies: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # y = R z and dz = R^T dy, hence
     # sum(z * dz) = z^T R^T dy = (R z)^T dy = sum(y * dy).
@@ -75,8 +73,6 @@ def block_pre_backward(
         dy=dy,
         pos=positions,
         freq=frequencies,
-        num_heads=num_heads,
-        head_dim=head_dim,
         scale=1.0 / x.shape[1],
     )
     dx_out = dx if ALLOW_INPLACE_GRAD_OUTPUT else dx.clone()
@@ -91,8 +87,8 @@ def block_pre_backward(
         ZdZ=zdz,
         rstd=rstd,
     )
-    dw = gemm(x_out.mT, dz)
-    return dx_out, dw, dwn
+    dw = gemm(dz.mT, x_out)
+    return dx_out, dw, dwn.to(dtype=wn.dtype)
 
 
 class BlockPre(torch.autograd.Function):
@@ -107,8 +103,6 @@ class BlockPre(torch.autograd.Function):
         wn: torch.Tensor,
         positions: torch.Tensor,
         frequencies: torch.Tensor,
-        num_heads: int,
-        head_dim: int,
         eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         qkv, rstd = block_pre_forward(
@@ -126,10 +120,8 @@ class BlockPre(torch.autograd.Function):
             qkv,
             rstd,
             positions,
-            frequencies[:head_dim],
+            frequencies,
         )
-        ctx.num_heads = num_heads
-        ctx.head_dim = head_dim
         return x, qkv
 
     @staticmethod
@@ -139,7 +131,7 @@ class BlockPre(torch.autograd.Function):
         ctx,
         dx: torch.Tensor,
         dy: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None]:
         (
             x,
             w,
@@ -159,8 +151,6 @@ class BlockPre(torch.autograd.Function):
             rstd=rstd,
             positions=positions,
             frequencies=frequencies,
-            num_heads=ctx.num_heads,
-            head_dim=ctx.head_dim,
         )
         return (
             dx_out,
@@ -168,8 +158,6 @@ class BlockPre(torch.autograd.Function):
             dwn,
             None,  # positions
             None,  # frequencies
-            None,  # num_heads
-            None,  # head_dim
             None,  # eps
         )
 
@@ -193,7 +181,7 @@ class Block(torch.autograd.Function):
         frequencies: torch.Tensor,
         eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        _ = block_forward(
+        qkv, x1, x2, rstd1, rstd2, z1 = block_forward(
             x0=x0,
             y0=y0,
             w0=w0,
@@ -207,16 +195,19 @@ class Block(torch.autograd.Function):
             eps=eps,
         )
         ctx.save_for_backward(
+            y0,
             w0,
             w1,
             w2,
             w3,
             wn0,
             wn1,
+            qkv,
             x1,
             x2,
             rstd1,
             rstd2,
+            z1,
             positions,
             frequencies,
         )
@@ -231,32 +222,38 @@ class Block(torch.autograd.Function):
         dy2: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None]:
         (
+            y0,
             w0,
             w1,
             w2,
             w3,
             wn0,
             wn1,
+            qkv,
             x1,
             x2,
             rstd1,
             rstd2,
+            z1,
             positions,
             frequencies,
         ) = ctx.saved_tensors
         dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = block_backward(
             dx2=dx2,
             dy2=dy2,
+            y0=y0,
             w0=w0,
             w1=w1,
             w2=w2,
             w3=w3,
             wn0=wn0,
             wn1=wn1,
+            qkv=qkv,
             x1=x1,
             x2=x2,
             rstd1=rstd1,
             rstd2=rstd2,
+            z1=z1,
             positions=positions,
             frequencies=frequencies,
         )
@@ -281,8 +278,6 @@ def block_pre(
     wn: torch.Tensor,
     positions: torch.Tensor,
     frequencies: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch, length, _ = x.shape
@@ -303,8 +298,6 @@ def block_pre(
         wn,
         positions,
         frequencies,
-        num_heads,
-        head_dim,
         eps,
     )
     return (
@@ -377,8 +370,6 @@ def block(
     wn1: torch.Tensor,
     positions: torch.Tensor,
     frequencies: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch, length, _ = x0.shape
@@ -416,8 +407,6 @@ def block(
         wn1,
         positions,
         frequencies,
-        num_heads,
-        head_dim,
         eps,
     )
     return (
