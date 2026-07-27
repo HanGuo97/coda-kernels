@@ -38,11 +38,12 @@ def block_pre_forward(
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert wn.dtype == x.dtype
-    _, n = x.shape
+    assert x.ndim == 2
+    dim = x.shape[1]
     h = x * rearrange(wn, "d -> 1 d")
     rstd = quack_rms_final_reduce(
         x=x.float() ** 2,
-        scale=1.0 / n,
+        scale=1.0 / dim,
         eps=eps,
     )
     qkv = gemm_rmsnorm_rope(
@@ -84,10 +85,10 @@ def block_pre_backward(
         # maybe we can directly pass in `BT` there
         B=w.mT,
         W=wn,
-        dX=dx_out,
         pre=x,
         ZdZ=zdz,
         rstd=rstd,
+        dX=dx_out,
     )
     dw = gemm(dz.mT, x_out)
     return dx_out, dw, dwn.to(dtype=wn.dtype)
@@ -237,13 +238,12 @@ def block_post_backward(
     dlogits: torch.Tensor,
     zdz2: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert x2.ndim == 2
+    assert x1.shape == x2.shape
+    dim = x2.shape[1]
     if scale is not None:
         # `scale` captures `1 / count`
         dloss = dloss * scale
-
-    assert x1.shape == x2.shape
-    assert x2.ndim == 2
-    dim = x2.shape[1]
     dx_out, dwn1, x_out2 = gemm_residual_partial_rmsnorm_bwd(
         A=dlogits,
         B=w3.mT,
@@ -251,8 +251,8 @@ def block_post_backward(
         pre=x2,
         ZdZ=zdz2 * (dloss / dim),
         rstd=rstd2,
-        dX=None,
         alpha=dloss,
+        dX=None,
     )
     dw3 = gemm_scalar_scale(
         A=dlogits.mT,
