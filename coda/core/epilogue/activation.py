@@ -7,6 +7,7 @@ from quack.epi_ops import EpiOp, ColVecLoad, RowVecLoad, TileStore
 from quack.gemm_act import GemmActMixin, GemmGatedMixin, _gated_epi_tile_fn
 from quack.gemm_sm90 import GemmSm90
 
+from coda.core.ops import math_utils
 from coda.core.ops import creation_utils
 from coda.core.epilogue.base import Epilogue
 
@@ -159,9 +160,11 @@ class RoPE(Epilogue):
                 tRS_rAuxOut = tRS_rD
 
             for i in cutlass.range_constexpr(cute.size(tRS_rD) // 2):
-                a = rPos[2 * i].to(dtype=gemm.acc_dtype) * rFreq[2 * i].to(dtype=gemm.acc_dtype)
-                c = cute.math.cos(a, fastmath=True)
-                s = cute.math.sin(a, fastmath=True)
+                s, c = math_utils.rope_pos_freq(
+                    pos=rPos[2 * i].to(dtype=cute.Float32),
+                    freq_hi=rFreq[2 * i].to(dtype=cute.Float32),
+                    freq_lo=rFreq[2 * i + 1].to(dtype=cute.Float32),
+                )
                 x = tRS_rD[2 * i]
                 y = tRS_rD[2 * i + 1]
                 tRS_rAuxOut[2 * i] = x * c + y * s
