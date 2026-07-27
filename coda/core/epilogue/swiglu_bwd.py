@@ -53,7 +53,7 @@ class SwiGLUBwdZdZ(Epilogue):
                 rDZ[2 * i + 1] = du.to(dtype=rDZ.dtype)
                 zdz = g * dg + u * du
                 if cutlass.const_expr(params.scale is not None):
-                    zdz = zdz * params.scale
+                    zdz *= params.scale
                 rZdZ[i] = zdz.to(dtype=rZdZ.dtype)
                 tRS_rD[i] = o.to(dtype=tRS_rD.dtype)
 
