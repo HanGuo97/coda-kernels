@@ -162,7 +162,7 @@ class BlockPre(torch.autograd.Function):
         )
 
 
-class LayerPost(torch.autograd.Function):
+class BlockPost(torch.autograd.Function):
 
     @staticmethod
     @input_guard
@@ -179,12 +179,20 @@ class LayerPost(torch.autograd.Function):
         wn1: torch.Tensor,
         targets: torch.Tensor,
         eps: float,
-        transpose: bool,
-        backend: str,
-        use_compile: bool,
+        ignore_index: int,
+        reduction: str,
     ) -> torch.Tensor:
-
-        x1, z1, rstd1, x2, rstd2, loss, dlogits, zdz2 = layer_post_forward_tunable(
+        (
+            loss,
+            x1,
+            x2,
+            rstd1,
+            rstd2,
+            z1,
+            scale,
+            dlogits,
+            zdz2,
+        ) = block_post_forward(
             x0=x0,
             y0=y0,
             w0=w0,
@@ -195,15 +203,26 @@ class LayerPost(torch.autograd.Function):
             wn1=wn1,
             targets=targets,
             eps=eps,
-            transpose=transpose,
-            backend=backend,
-            use_compile=use_compile,
+            ignore_index=ignore_index,
+            reduction=reduction,
         )
-
-        ctx.save_for_backward(w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, rstd1, rstd2, dlogits, zdz2)
-        ctx.transpose = transpose
-        ctx.backend = backend
-        ctx.use_compile = use_compile
+        ctx.save_for_backward(
+            y0,
+            w0,
+            w1,
+            w2,
+            w3,
+            wn0,
+            wn1,
+            x1,
+            x2,
+            rstd1,
+            rstd2,
+            z1,
+            scale,
+            dlogits,
+            zdz2,
+        )
         return loss
 
     @staticmethod
@@ -212,13 +231,27 @@ class LayerPost(torch.autograd.Function):
     def backward(
         ctx,
         dloss: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]:
-        w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, rstd1, rstd2, dlogits, zdz2 = ctx.saved_tensors
-
-        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = layer_post_backward_tunable(
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None]:
+        (
+            y0,
+            w0,
+            w1,
+            w2,
+            w3,
+            wn0,
+            wn1,
+            x1,
+            x2,
+            rstd1,
+            rstd2,
+            z1,
+            scale,
+            dlogits,
+            zdz2,
+        ) = ctx.saved_tensors
+        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = block_post_backward(
             dloss=dloss,
-            dlogits=dlogits,
-            zdz2=zdz2,
+            y0=y0,
             w0=w0,
             w1=w1,
             w2=w2,
@@ -227,15 +260,13 @@ class LayerPost(torch.autograd.Function):
             wn1=wn1,
             x1=x1,
             x2=x2,
-            y0=y0,
-            z1=z1,
             rstd1=rstd1,
             rstd2=rstd2,
-            transpose=ctx.transpose,
-            backend=ctx.backend,
-            use_compile=ctx.use_compile,
+            z1=z1,
+            scale=scale,
+            dlogits=dlogits,
+            zdz2=zdz2,
         )
-
         return (
             dx0,
             dy0,
@@ -247,9 +278,8 @@ class LayerPost(torch.autograd.Function):
             dwn1,
             None,  # targets
             None,  # eps
-            None,  # transpose
-            None,  # backend
-            None,  # use_compile
+            None,  # ignore_index
+            None,  # reduction
         )
 
 
