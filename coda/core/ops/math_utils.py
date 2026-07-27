@@ -1,3 +1,4 @@
+import math
 import cutlass
 import cutlass.cute as cute
 from collections.abc import Callable
@@ -10,6 +11,11 @@ from coda.core.ops import misc_utils
 
 Scalar = cute.Numeric | cutlass.cutlass_dsl.cutlass_arith.ArithValue
 Tensor = cute.Tensor | cute.TensorSSA | Scalar
+
+# https://github.com/Dao-AILab/quack/blob/main/quack/epilogue/rotary.py
+_FP32_SIGNIFICAND_BITS = 24
+_FP32_ROUND_TO_INT_BIAS = 1.5 * 2.0 ** (_FP32_SIGNIFICAND_BITS - 1)
+_TWO_PI = 2.0 * math.pi
 
 
 def make_dispatch_function(
@@ -170,3 +176,21 @@ def clamp(
         y = fmin(y, max_val)
 
     return y
+
+
+def rope_angle_turns(pos: cute.Float32, freq_hi: cute.Float32, freq_lo: cute.Float32) -> tuple[cute.Float32, cute.Float32]:
+    # https://github.com/Dao-AILab/quack/blob/main/quack/epilogue/rotary.py
+    t = pos * freq_hi
+    terr = cute.math.fma(pos, freq_hi, -t)
+    lo = cute.math.fma(pos, freq_lo, terr)
+    return t, lo
+
+
+def rope_sincos_turns(t: cute.Float32, lo: cute.Float32) -> tuple[cute.Float32, cute.Float32]:
+    # https://github.com/Dao-AILab/quack/blob/main/quack/epilogue/rotary.py
+    q = cute.math.fma(t, 1.0, _FP32_ROUND_TO_INT_BIAS) - _FP32_ROUND_TO_INT_BIAS
+    r = (t - q) + lo
+    r_rad = r * _TWO_PI
+    s = cute.math.sin(r_rad, fastmath=True)
+    c = cute.math.cos(r_rad, fastmath=True)
+    return s, c
