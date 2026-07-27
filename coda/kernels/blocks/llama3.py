@@ -10,9 +10,9 @@ from coda.core.elementwise.functional import (
 from coda.core.gemm.functional import (
     gemm as coda_gemm,
     gemm_scalar_scale,
-    gemm_lse,
     gemm_residual_partial_rmsnorm,
     gemm_residual_partial_rmsnorm_bwd,
+    gemm_rmsnorm_lse,
     gemm_rmsnorm_rope,
     gemm_rmsnorm_swiglu,
     gemm_swiglu_bwd_zdz,
@@ -162,6 +162,61 @@ class BlockPre(torch.autograd.Function):
         )
 
 
+def block_post_forward(
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    targets: torch.Tensor,
+    eps: float,
+    ignore_index: int,
+    reduction: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
+    x1, h1, rstd1 = gemm_residual_partial_rmsnorm(
+        A=y0,
+        B=w0.mT,
+        C=x0,
+        W=wn0,
+        eps=eps,
+    )
+    z1, y1 = gemm_rmsnorm_swiglu(
+        A=h1,
+        B=w1.mT,
+        rstd=rstd1,
+    )
+    x2, h2, rstd2 = gemm_residual_partial_rmsnorm(
+        A=y1,
+        B=w2.mT,
+        C=x1,
+        W=wn1,
+        eps=eps,
+    )
+    logits, lses = gemm_rmsnorm_lse(
+        A=h2,
+        B=w3.mT,
+        rstd=rstd2,
+    )
+    losses, zdz2 = cross_entropy_fwd_bwd(
+        logits=logits,
+        lses=lses,
+        target=targets,
+        ignore_index=ignore_index,
+        return_zdz=True,
+    )
+    dlogits = logits
+    if reduction == "mean":
+        scale = 1.0 / (targets != ignore_index).sum().float()
+        loss = losses.sum() * scale
+    else:
+        scale = None
+        loss = losses.sum()
+    return loss, x1, x2, rstd1, rstd2, z1, scale, dlogits, zdz2
+
+
 class BlockPost(torch.autograd.Function):
 
     @staticmethod
@@ -281,6 +336,48 @@ class BlockPost(torch.autograd.Function):
             None,  # ignore_index
             None,  # reduction
         )
+
+
+def block_forward(
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    x1, h1, rstd1 = gemm_residual_partial_rmsnorm(
+        A=y0,
+        B=w0.mT,
+        C=x0,
+        W=wn0,
+        eps=eps,
+    )
+    z1, y1 = gemm_rmsnorm_swiglu(
+        A=h1,
+        B=w1.mT,
+        rstd=rstd1,
+    )
+    x2, h2, rstd2 = gemm_residual_partial_rmsnorm(
+        A=y1,
+        B=w2.mT,
+        C=x1,
+        W=wn1,
+        eps=eps,
+    )
+    qkv = gemm_rmsnorm_rope(
+        A=h2,
+        B=w3.mT,
+        rstd=rstd2,
+        positions=positions,
+        frequencies=frequencies,
+    )
+    return qkv, x1, x2, rstd1, rstd2, z1
 
 
 class Block(torch.autograd.Function):
