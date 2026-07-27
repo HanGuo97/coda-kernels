@@ -166,6 +166,113 @@ class BlockPre(torch.autograd.Function):
         )
 
 
+class Layer(torch.autograd.Function):
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_fwd
+    def forward(
+        ctx,
+        x0: torch.Tensor,
+        y0: torch.Tensor,
+        w0: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        w3: torch.Tensor,
+        wn0: torch.Tensor,
+        wn1: torch.Tensor,
+        cos_sin: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        num_heads: int,
+        head_dim: int,
+        eps: float,
+        transpose: bool,
+        backend: str,
+        use_compile: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+
+        x1, z1, rstd1, x2, y2, z2, rstd2 = layer_forward_tunable(
+            x0=x0,
+            y0=y0,
+            w0=w0,
+            w1=w1,
+            w2=w2,
+            w3=w3,
+            wn0=wn0,
+            wn1=wn1,
+            cos_sin=cos_sin,
+            eps=eps,
+            transpose=transpose,
+            backend=backend,
+            use_compile=use_compile,
+        )
+
+        ctx.save_for_backward(w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, z2, rstd1, rstd2, cos_sin, cos, sin)
+        ctx.num_heads = num_heads
+        ctx.head_dim = head_dim
+        ctx.transpose = transpose
+        ctx.backend = backend
+        ctx.use_compile = use_compile
+        return x2, y2
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_bwd
+    def backward(
+        ctx,
+        dx2: torch.Tensor,
+        dy2: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None, None, None, None, None]:
+        w0, w1, w2, w3, wn0, wn1, x1, x2, y0, z1, z2, rstd1, rstd2, cos_sin, cos, sin = ctx.saved_tensors
+
+        dx0, dy0, dw0, dw1, dw2, dw3, dwn0, dwn1 = layer_backward_tunable(
+            dx2=dx2,
+            dy2=dy2,
+            w0=w0,
+            w1=w1,
+            w2=w2,
+            w3=w3,
+            wn0=wn0,
+            wn1=wn1,
+            x1=x1,
+            x2=x2,
+            y0=y0,
+            z1=z1,
+            z2=z2,
+            rstd1=rstd1,
+            rstd2=rstd2,
+            cos_sin=cos_sin,
+            cos=cos,
+            sin=sin,
+            num_heads=ctx.num_heads,
+            head_dim=ctx.head_dim,
+            transpose=ctx.transpose,
+            backend=ctx.backend,
+            use_compile=ctx.use_compile,
+        )
+
+        return (
+            dx0,
+            dy0,
+            dw0,
+            dw1,
+            dw2,
+            dw3,
+            dwn0,
+            dwn1,
+            None,  # cos_sin
+            None,  # cos
+            None,  # sin
+            None,  # num_heads
+            None,  # head_dim
+            None,  # eps
+            None,  # transpose
+            None,  # backend
+            None,  # use_compile
+        )
+
+
 def block_pre(
     x: torch.Tensor,
     w: torch.Tensor,
