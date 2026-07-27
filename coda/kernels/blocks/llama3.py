@@ -66,6 +66,8 @@ def block_pre_backward(
     positions: torch.Tensor,
     frequencies: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert x.ndim == 2
+    dim = x.shape[1]
     # y = R z and dz = R^T dy, hence
     # sum(z * dz) = z^T R^T dy = (R z)^T dy = sum(y * dy).
     dz, zdz = rope_bwd_zdz(
@@ -73,7 +75,7 @@ def block_pre_backward(
         dy=dy,
         pos=positions,
         freq=frequencies,
-        scale=1.0 / x.shape[1],
+        scale=1.0 / dim,
     )
     dx_out = dx if ALLOW_INPLACE_GRAD_OUTPUT else dx.clone()
     dx_out, dwn, x_out = gemm_residual_partial_rmsnorm_bwd(
@@ -215,6 +217,77 @@ def block_post_forward(
         scale = None
         loss = losses.sum()
     return loss, x1, x2, rstd1, rstd2, z1, scale, dlogits, zdz2
+
+
+def block_post_backward(
+    dloss: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    x1: torch.Tensor,
+    x2: torch.Tensor,
+    rstd1: torch.Tensor,
+    rstd2: torch.Tensor,
+    z1: torch.Tensor,
+    scale: torch.Tensor | None,
+    dlogits: torch.Tensor,
+    zdz2: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if scale is not None:
+        # `scale` captures `1 / count`
+        dloss = dloss * scale
+
+    assert x1.shape == x2.shape
+    assert x2.ndim == 2
+    dim = x2.shape[1]
+    dx_out, dwn1, x_out2 = gemm_residual_partial_rmsnorm_bwd(
+        A=dlogits,
+        B=w3.mT,
+        W=wn1,
+        pre=x2,
+        ZdZ=zdz2 * (dloss / dim),
+        rstd=rstd2,
+        dX=None,
+        alpha=dloss,
+    )
+    dw3 = gemm_scalar_scale(
+        A=dlogits.mT,
+        B=x_out2,
+        alpha=dloss,
+    )
+    dz1, zdz1, y1 = gemm_swiglu_bwd_zdz(
+        A=dx_out,
+        B=w2.mT,
+        Z=z1,
+        scale=1.0 / dim,
+    )
+    dw2 = gemm(dx_out.mT, y1)
+    dx_out, dwn0, x_out1 = gemm_residual_partial_rmsnorm_bwd(
+        A=dz1,
+        B=w1.mT,
+        W=wn0,
+        pre=x1,
+        ZdZ=zdz1,
+        rstd=rstd1,
+        dX=dx_out,
+    )
+    dw1 = gemm(dz1.mT, x_out1)
+    dy0 = gemm(dx_out, w0)
+    dw0 = gemm(dx_out.mT, y0)
+    return (
+        dx_out,
+        dy0,
+        dw0,
+        dw1,
+        dw2,
+        dw3,
+        dwn0.to(dtype=wn0.dtype),
+        dwn1.to(dtype=wn1.dtype),
+    )
 
 
 class BlockPost(torch.autograd.Function):
@@ -378,6 +451,80 @@ def block_forward(
         frequencies=frequencies,
     )
     return qkv, x1, x2, rstd1, rstd2, z1
+
+
+def block_backward(
+    dx2: torch.Tensor,
+    dy2: torch.Tensor,
+    y0: torch.Tensor,
+    w0: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    wn0: torch.Tensor,
+    wn1: torch.Tensor,
+    qkv: torch.Tensor,
+    x1: torch.Tensor,
+    x2: torch.Tensor,
+    rstd1: torch.Tensor,
+    rstd2: torch.Tensor,
+    z1: torch.Tensor,
+    positions: torch.Tensor,
+    frequencies: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert x2.ndim == 2
+    assert x1.shape == x2.shape
+    dim = x2.shape[1]
+    # y = R z and dz = R^T dy, hence
+    # sum(z * dz) = z^T R^T dy = (R z)^T dy = sum(y * dy).
+    dz2, zdz2 = rope_bwd_zdz(
+        y=qkv,
+        dy=dy2,
+        pos=positions,
+        freq=frequencies,
+        scale=1.0 / dim,
+    )
+    dx_out = dx2 if ALLOW_INPLACE_GRAD_OUTPUT else dx2.clone()
+    dx_out, dwn1, x_out2 = gemm_residual_partial_rmsnorm_bwd(
+        A=dz2,
+        B=w3.mT,
+        W=wn1,
+        pre=x2,
+        # we don't need `/ dim` here because `rope_bwd_zdz` already does it
+        ZdZ=zdz2,
+        rstd=rstd2,
+        dX=dx_out,
+    )
+    dw3 = gemm(dz2.mT, x_out2)
+    dz1, zdz1, y1 = gemm_swiglu_bwd_zdz(
+        A=dx_out,
+        B=w2.mT,
+        Z=z1,
+        scale=1.0 / dim,
+    )
+    dw2 = gemm(dx_out.mT, y1)
+    dx_out, dwn0, x_out1 = gemm_residual_partial_rmsnorm_bwd(
+        A=dz1,
+        B=w1.mT,
+        W=wn0,
+        pre=x1,
+        ZdZ=zdz1,
+        rstd=rstd1,
+        dX=dx_out,
+    )
+    dw1 = gemm(dz1.mT, x_out1)
+    dy0 = gemm(dx_out, w0)
+    dw0 = gemm(dx_out.mT, y0)
+    return (
+        dx_out,
+        dy0,
+        dw0,
+        dw1,
+        dw2,
+        dw3,
+        dwn0.to(dtype=wn0.dtype),
+        dwn1.to(dtype=wn1.dtype),
+    )
 
 
 class Block(torch.autograd.Function):
