@@ -169,10 +169,15 @@ GemmResidualSqSumScaledAux = (
     )
 )
 
-GemmResidualRMSNormBwd = (
-    ResidualRMSNormBwd()
+GemmScalarScaleResidualRMSNormBwd = (
+    compose(
+        [
+            ScalarScale(),
+            ResidualRMSNormBwd(),
+        ]
+    )
     .bind(
-        name="GemmResidualRMSNormBwd",
+        name="GemmScalarScaleResidualRMSNormBwd",
         gemm_cls=GemmSm90,
     )
 )
