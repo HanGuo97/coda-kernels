@@ -10,6 +10,7 @@ from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, V
 from quack.epi_composable import ComposableEpiMixin
 from quack.rounding import RoundingMode
 
+from coda.core.ops.misc_utils import static_assert
 from coda.core.epilogue.epi_ops import ColVecStore
 
 FieldSpec = tuple[str, object, object]
@@ -227,6 +228,9 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
                     self.cta_tile_shape_aux_out_mn = aux_op.epi_tile_fn(self, cta_tile_shape_mn)
                 else:
                     self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
+
+                if cutlass.const_expr(self.cta_tile_shape_aux_out_mn[1] != cta_tile_shape_mn[1]):
+                    static_assert(self.atom_layout_mnk[1] == 1)
 
             d = self._epi_ops_to_params_dict(args)
             for name, _, _ in self._extra_param_fields:
