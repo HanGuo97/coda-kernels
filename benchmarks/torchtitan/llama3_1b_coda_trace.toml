@@ -4,7 +4,7 @@ description = "Llama 3 1B training"
 
 [profiling]
 enable_profiling = true
-save_traces_folder = "profile_trace_1B"
+save_traces_folder = "profile_trace_1B_coda"
 profile_freq = 30
 profiler_warmup = 5
 profiler_active = 20
@@ -15,7 +15,7 @@ enable_tensorboard = false
 save_tb_folder = "tb"
 
 [model]
-name = "llama3"
+name = "llama3_coda"
 flavor = "1B"
 hf_assets_path = "./assets/hf/Llama-3.1-1B"
 # converters = ["float8"]
