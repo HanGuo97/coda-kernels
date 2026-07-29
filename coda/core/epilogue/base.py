@@ -10,7 +10,7 @@ from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, V
 from quack.epi_composable import ComposableEpiMixin
 from quack.rounding import RoundingMode
 
-from coda.core.ops.misc_utils import static_assert
+from coda.core.ops import misc_utils
 from coda.core.epilogue.epi_ops import ColVecStore
 
 FieldSpec = tuple[str, object, object]
@@ -229,8 +229,15 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
                 else:
                     self.cta_tile_shape_aux_out_mn = cta_tile_shape_mn
 
+                # _setup_tiled_mma permutes N at atom_layout_n > 1; a full-tile
+                # store undoes that, a narrowed one does not and silently lands
+                # correct values in permuted columns
                 if cutlass.const_expr(self.cta_tile_shape_aux_out_mn[1] != cta_tile_shape_mn[1]):
-                    static_assert(self.atom_layout_mnk[1] == 1)
+                    misc_utils.static_assert(
+                        self.atom_layout_mnk[1] == 1,
+                        f"narrowed aux tile permutes the aux output at "
+                        f"atom_layout_n={self.atom_layout_mnk[1]}",
+                    )
 
             d = self._epi_ops_to_params_dict(args)
             for name, _, _ in self._extra_param_fields:
