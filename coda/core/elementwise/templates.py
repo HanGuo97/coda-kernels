@@ -13,6 +13,7 @@ from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
+from coda.core.gemm.gemm_interface import AUTOTUNE_CACHE_RESULTS
 
 
 @dataclasses.dataclass(frozen=True)
@@ -265,7 +266,7 @@ def _elementwise_op(
         )
     ],
     key=["op"],
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _elementwise_op_tuned(
     op: Callable,
