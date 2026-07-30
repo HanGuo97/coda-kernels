@@ -40,6 +40,8 @@ class EpilogueKeyConst(NamedTuple):
 
 
 def _key_field(op: EpiOp, tensor: torch.Tensor) -> EpilogueKeyTensor:
+    # tile args are (m, n, l)
+    # vec-reduce args are (l, m_tiles, n) or (l, m, n_tiles)
     if isinstance(op, (TileLoad, TileStore)):
         assert tensor.ndim == 3
         if tensor.stride(1) == 1:
@@ -111,7 +113,7 @@ def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> di
             epi_args_preprocessed[name] = preprocess_vector(arg, permute=False)
         elif isinstance(op, VecReduce):
             if isinstance(op, RowVecReduce):
-                # tiles on the leading dimension: the .mT of an (n, m_tiles) buffer 
+                # tiles on the leading dimension: the .mT of an (n, m_tiles) buffer
                 assert arg.stride(-2) == 1
             else:
                 assert arg.is_contiguous()
@@ -162,8 +164,8 @@ def _make_fake_epi_arg(
         )
     if isinstance(op, RowVecReduce):
         m_tiles = cute.sym_int()
-        # This is almost always followed by a reduction across the tiles,
-        # keep the tiles on the leading dimension makes the follow-up fast.
+        # This is almost always followed by a reduction across the tiles, so
+        # keeping the tiles on the leading dimension makes the follow-up fast.
         return quack_make_fake_tensor(
             dtype=cutlass_dtype,
             shape=(l, m_tiles, n),
