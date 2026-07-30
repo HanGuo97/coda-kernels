@@ -941,6 +941,7 @@ def gemm_residual_partial_rmsnorm(
 
 # @torch.compile(fullgraph=True, dynamic=False)
 def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int) -> None:
+    assert out.dtype == partials.dtype
     torch.sum(partials, dim=dim, out=out)
 
 
