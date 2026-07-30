@@ -1,3 +1,4 @@
+import os
 import copy
 import torch
 import functools
@@ -33,6 +34,8 @@ from quack.gemm_tvm_ffi_utils import (
 )
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
+
+AUTOTUNE_CACHE_RESULTS = os.environ.get("CODA_AUTOTUNE_CACHE", "0") == "1"
 
 
 def _extend_configs(
@@ -73,6 +76,7 @@ def _compile_gemm(
     pingpong: bool,
     persistent: bool,
     is_dynamic_persistent: bool,
+    fp8_fast_accum: bool,
     add_to_output: bool,
     concat_layout: tuple | None,
     varlen_m: bool,
@@ -128,7 +132,11 @@ def _compile_gemm(
         aidx_len=aidx_len,
     )
     if device_capacity[0] == 9:
-        extra_kwargs = {"pingpong": pingpong, "is_persistent": persistent}
+        extra_kwargs = {
+            "pingpong": pingpong,
+            "is_persistent": persistent,
+            "fp8_fast_accum": fp8_fast_accum,
+        }
     else:
         raise NotImplementedError
 
@@ -173,6 +181,7 @@ def _gemm_epilogue(
     pingpong: bool,
     persistent: bool,
     is_dynamic_persistent: bool,
+    fp8_fast_accum: bool,
     max_swizzle_size: int,
     batch_idx_permute: torch.Tensor | None,
     add_to_output: bool,
@@ -214,6 +223,7 @@ def _gemm_epilogue(
         pingpong=pingpong,
         persistent=persistent,
         is_dynamic_persistent=is_dynamic_persistent,
+        fp8_fast_accum=fp8_fast_accum,
         add_to_output=add_to_output,
         concat_layout=None,
         varlen_m=False,
@@ -290,6 +300,7 @@ def _gemm_epilogue_tuned(
     epi_keys: tuple,
     pin_tile_M: int | None,
     pin_tile_N: int | None,
+    fp8_fast_accum: bool,
     batch_idx_permute: torch.Tensor | None,
     add_to_output: bool,
     config: GemmConfig | None,
@@ -322,6 +333,7 @@ def _gemm_epilogue_tuned(
         pingpong=config.pingpong,
         persistent=True,
         is_dynamic_persistent=config.is_dynamic_persistent,
+        fp8_fast_accum=fp8_fast_accum,
         max_swizzle_size=config.max_swizzle_size,
         batch_idx_permute=batch_idx_permute,
         add_to_output=add_to_output,
