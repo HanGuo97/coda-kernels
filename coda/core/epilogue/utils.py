@@ -53,6 +53,19 @@ def _key_field(op: EpiOp, tensor: torch.Tensor) -> EpilogueKeyTensor:
             dtype=tensor.dtype,
             major=major,
         )
+    elif isinstance(op, VecReduce):
+        assert tensor.ndim == 3
+        if tensor.stride(2) == 1:
+            major = "n"
+        elif tensor.stride(1) == 1:
+            major = "m"
+        else:
+            raise ValueError
+        return EpilogueKeyTensor(
+            name=op.name,
+            dtype=tensor.dtype,
+            major=major,
+        )
     else:
         return EpilogueKeyTensor(
             name=op.name,
@@ -97,7 +110,11 @@ def preprocess_epi_args(GemmCls: type[ComposableEpiMixin], epi_args: dict) -> di
             assert arg.is_contiguous()
             epi_args_preprocessed[name] = preprocess_vector(arg, permute=False)
         elif isinstance(op, VecReduce):
-            assert arg.is_contiguous()
+            if isinstance(op, RowVecReduce):
+                # tiles on the leading dimension: the .mT of an (n, m_tiles) buffer 
+                assert arg.stride(-2) == 1
+            else:
+                assert arg.is_contiguous()
             epi_args_preprocessed[name] = preprocess_tensor(arg, permute=False)
         elif isinstance(op, (TileLoad, TileStore)):
             epi_args_preprocessed[name] = preprocess_tensor(arg, permute=True)
@@ -145,10 +162,12 @@ def _make_fake_epi_arg(
         )
     if isinstance(op, RowVecReduce):
         m_tiles = cute.sym_int()
+        # This is almost always followed by a reduction across the tiles,
+        # keep the tiles on the leading dimension makes the follow-up fast.
         return quack_make_fake_tensor(
             dtype=cutlass_dtype,
             shape=(l, m_tiles, n),
-            leading_dim=2,
+            leading_dim=1,
             divisibility=1,
         )
     if isinstance(op, TileLoad):
