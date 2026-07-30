@@ -6,13 +6,17 @@ from quack.rms_final_reduce import _rms_final_reduce_out
 from quack.autotuner import autotune, AutotuneConfig
 from quack.cute_dsl_utils import get_device_capacity
 
-from coda.core.epilogue.utils import preprocess_epi_args, make_epi_keys
+from coda.core.epilogue.utils import (
+    preprocess_epi_args,
+    make_epi_keys,
+)
 from coda.core.gemm.gemm_interface import (
     _kernel_op,
     _gemm_epilogue_tuned,
     _preprocess_gemm_operands,
     prune_gemm_configs,
     GEMM_CONFIGS,
+    AUTOTUNE_CACHE_RESULTS,
 )
 
 from coda.core.ops import misc_utils
@@ -42,7 +46,7 @@ torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limi
         AutotuneConfig(backend="quack"),
         AutotuneConfig(backend="cublas"),
     ],
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_tuned(
     A: torch.Tensor,
@@ -77,7 +81,7 @@ def gemm(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_scalar_scale_tuned(
     A: torch.Tensor,
@@ -154,7 +158,7 @@ def gemm_scalar_scale(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_swiglu_tuned(
     A: torch.Tensor,
@@ -234,7 +238,7 @@ def gemm_swiglu(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_rmsnorm_swiglu_tuned(
     A: torch.Tensor,
@@ -336,7 +340,7 @@ def _sqsum_num_segments(head_dim: int) -> int:
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     key=["head_dim", "num_segments"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_qkv_sqsum_tuned(
     A: torch.Tensor,
@@ -436,7 +440,7 @@ def _lse_reduce_compiled(lses: torch.Tensor, lse_partial: torch.Tensor) -> None:
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     key=["vocab_size"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_lse_tuned(
     A: torch.Tensor,
@@ -525,7 +529,7 @@ def gemm_lse(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     key=["vocab_size"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_rmsnorm_lse_tuned(
     A: torch.Tensor,
@@ -622,7 +626,7 @@ def gemm_rmsnorm_lse(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     key=["vocab_size", "ignore_index"],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_lse_select_logits_tuned(
     A: torch.Tensor,
@@ -738,7 +742,7 @@ def gemm_lse_select_logits(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_rmsnorm_tuned(
     A: torch.Tensor,
@@ -817,7 +821,7 @@ def gemm_rmsnorm(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_residual_partial_rmsnorm_tuned(
     A: torch.Tensor,
@@ -934,7 +938,7 @@ def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int) ->
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_residual_partial_rmsnorm_bwd_tuned(
     A: torch.Tensor,
@@ -1080,7 +1084,7 @@ def gemm_residual_partial_rmsnorm_bwd(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_swiglu_bwd_zdz_tuned(
     A: torch.Tensor,
@@ -1194,7 +1198,7 @@ def gemm_swiglu_bwd_zdz(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_rope_tuned(
     A: torch.Tensor,
@@ -1283,7 +1287,7 @@ def gemm_rope(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in GEMM_CONFIGS],
     prune_configs_by={"early_config_prune": prune_gemm_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _gemm_rmsnorm_rope_tuned(
     A: torch.Tensor,
