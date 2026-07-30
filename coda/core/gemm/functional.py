@@ -103,6 +103,7 @@ def _gemm_scalar_scale_tuned(
         epi_keys=make_epi_keys(GemmScalarScale, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -180,6 +181,7 @@ def _gemm_swiglu_tuned(
         epi_keys=make_epi_keys(GemmSwiGLU, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -262,6 +264,7 @@ def _gemm_rmsnorm_swiglu_tuned(
         epi_keys=make_epi_keys(GemmScaleSwiGLU, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -366,6 +369,7 @@ def _gemm_qkv_sqsum_tuned(
         epi_keys=make_epi_keys(GemmQKVSqSum, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -470,6 +474,7 @@ def _gemm_lse_tuned(
         epi_keys=make_epi_keys(GemmLSE, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -561,6 +566,7 @@ def _gemm_rmsnorm_lse_tuned(
         epi_keys=make_epi_keys(GemmScaleLSE, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -661,6 +667,7 @@ def _gemm_lse_select_logits_tuned(
         epi_keys=make_epi_keys(GemmLSESelectLogits, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -764,6 +771,7 @@ def _gemm_rmsnorm_tuned(
         epi_keys=make_epi_keys(GemmScale, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -856,6 +864,7 @@ def _gemm_residual_partial_rmsnorm_tuned(
         epi_keys=make_epi_keys(GemmResidualSqSumScaledAux, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -956,7 +965,9 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
 ) -> None:
     M, N, _ = D.shape
     m_tiles = misc_utils.ceil_div(M, config.tile_m)
-    partials = torch.empty(m_tiles, N, dtype=torch.float32, device=A.device)
+    # Tile-major (N, m_tiles) so the finishing reduction runs down contiguous memory.
+    # The epilogue gets the .mT view and is unchanged.
+    partials_T = torch.empty(N, m_tiles, dtype=torch.float32, device=A.device)
     if alpha is not None:
         extra_epi_args = {"alpha": alpha}
     else:
@@ -971,7 +982,7 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
             "mRowVecW": W,
             "mMatrixC": C,
             "mAuxOut": C_out,
-            "mDWVec": partials,
+            "mDWVec": partials_T.mT,
             **extra_epi_args,
         },
     )
@@ -985,14 +996,15 @@ def _gemm_residual_partial_rmsnorm_bwd_tuned(
         epi_keys=make_epi_keys(GemmScalarScaleResidualRMSNormBwd, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=accumulate,
         config=config,
     )
     _sum_reduce_compiled(
-        partials=partials,
+        partials=partials_T,
         out=dW,
-        dim=0,
+        dim=-1,
     )
 
 
@@ -1118,6 +1130,7 @@ def _gemm_swiglu_bwd_zdz_tuned(
         epi_keys=make_epi_keys(GemmSwiGLUBwdZdZ, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -1222,6 +1235,7 @@ def _gemm_rope_tuned(
         epi_keys=make_epi_keys(GemmRoPE, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
@@ -1313,6 +1327,7 @@ def _gemm_rmsnorm_rope_tuned(
         epi_keys=make_epi_keys(GemmScaleRoPE, epi_args),
         pin_tile_M=None,
         pin_tile_N=None,
+        fp8_fast_accum=False,
         batch_idx_permute=None,
         add_to_output=False,
         config=config,
