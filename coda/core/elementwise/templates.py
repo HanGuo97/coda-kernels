@@ -13,7 +13,7 @@ from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
 from coda.core.ops import creation_utils
-from coda.core.gemm.gemm_interface import AUTOTUNE_CACHE_RESULTS
+from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS
 
 
 @dataclasses.dataclass(frozen=True)
