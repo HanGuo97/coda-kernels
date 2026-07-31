@@ -6,6 +6,8 @@ from quack.rms_final_reduce import _rms_final_reduce_out
 from quack.autotuner import autotune, AutotuneConfig
 from quack.cute_dsl_utils import get_device_capacity
 
+from coda.core.ops import misc_utils
+from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS
 from coda.core.epilogue.utils import (
     preprocess_epi_args,
     make_epi_keys,
@@ -16,10 +18,7 @@ from coda.core.gemm.gemm_interface import (
     _preprocess_gemm_operands,
     prune_gemm_configs,
     GEMM_CONFIGS,
-    AUTOTUNE_CACHE_RESULTS,
 )
-
-from coda.core.ops import misc_utils
 from coda.core.gemm.registry import (
     GemmScale,
     GemmScalarScale,

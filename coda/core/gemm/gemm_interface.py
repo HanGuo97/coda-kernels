@@ -34,8 +34,7 @@ from quack.gemm_tvm_ffi_utils import (
 )
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
-
-AUTOTUNE_CACHE_RESULTS = os.environ.get("CODA_AUTOTUNE_CACHE", "0") == "1"
+from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS
 
 
 def _extend_configs(
