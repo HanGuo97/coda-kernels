@@ -515,7 +515,11 @@ def qknorm_rope_bwd(
         kernel_dx = dx[:, :size_qk]
         kernel_dv = None
     if dgamma is None:
-        dgamma = torch.empty_like(gamma)
+        dgamma = torch.empty(
+            gamma.shape,
+            dtype=torch.float32,
+            device=gamma.device,
+        )
     _qknorm_rope_bwd(
         dx=kernel_dx,
         dq=dq,
@@ -535,3 +539,88 @@ def qknorm_rope_bwd(
         interleaved=interleaved,
     )
     return dx, dgamma
+
+
+@autotune(
+    configs=[AutotuneConfig(config=c) for c in _ZDZ_CONFIGS],
+    prune_configs_by={"early_config_prune": _prune_rope_bwd_zdz_configs},
+    cache_results=AUTOTUNE_CACHE_RESULTS,
+)
+def _rope_bwd_zdz_tuned(
+    y: torch.Tensor,
+    dy: torch.Tensor,
+    dz: torch.Tensor,
+    zdz: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    scale: float,
+    config: ElementwiseConfig | None,
+) -> None:
+    if config is None:
+        config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
+
+    rope_bwd_zdz_(
+        y=y,
+        dy=dy,
+        dz=dz,
+        zdz=zdz,
+        pos=pos,
+        freq=freq,
+        scale=scale,
+        thr_m=config.thr_m,
+        thr_n=config.thr_n,
+        val_m=config.val_m,
+    )
+
+
+@_kernel_op("coda::_rope_bwd_zdz", mutates_args=("dz", "zdz"))
+def _rope_bwd_zdz(
+    y: torch.Tensor,
+    dy: torch.Tensor,
+    dz: torch.Tensor,
+    zdz: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    scale: float,
+) -> None:
+    _rope_bwd_zdz_tuned(
+        y=y,
+        dy=dy,
+        dz=dz,
+        zdz=zdz,
+        pos=pos,
+        freq=freq,
+        scale=scale,
+    )
+
+
+def rope_bwd_zdz(
+    y: torch.Tensor,
+    dy: torch.Tensor,
+    pos: torch.Tensor,
+    freq: torch.Tensor,
+    scale: float = 1.0,
+    dz: torch.Tensor | None = None,
+    zdz: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    assert y.ndim == 2
+    assert y.shape == dy.shape
+    assert y.dtype == dy.dtype
+    assert pos.shape == (y.shape[0],)
+    assert pos.dtype in (torch.int32, torch.float32)
+    assert freq.shape == (y.shape[1],)
+    assert freq.dtype == torch.float32
+    if dz is None:
+        dz = torch.empty_like(y)
+    if zdz is None:
+        zdz = torch.empty(y.shape[0], dtype=torch.float32, device=y.device)
+    _rope_bwd_zdz(
+        y=y,
+        dy=dy,
+        dz=dz,
+        zdz=zdz,
+        pos=pos,
+        freq=freq,
+        scale=scale,
+    )
+    return dz, zdz
