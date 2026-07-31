@@ -10,6 +10,7 @@ from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS, NUM_BITS_PER_COPY
 from coda.core.ops.misc_utils import static_assert, ceil_div
 from coda.core.gemm.gemm_interface import _kernel_op
 from coda.core.elementwise.rope import qknorm_rope_, qknorm_rope_bwd_
+from coda.core.elementwise.zdz import rope_bwd_zdz_
 from coda.core.elementwise.cross_entropy import cross_entropy_fwd_bwd_
 from coda.core.elementwise.templates import ElementwiseConfig, _elementwise_op_tuned
 
@@ -64,8 +65,9 @@ _ZDZ_CONFIGS = tuple(
     )
 )
 
+
 # @torch.compile(fullgraph=True, dynamic=False)
-def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int) -> None:
+def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int | tuple[int, ...]) -> None:
     assert out.dtype == partials.dtype
     torch.sum(partials, dim=dim, out=out)
 
@@ -162,7 +164,6 @@ def _cross_entropy_fwd_bwd_tuned(
         vector_size = NUM_BITS_PER_COPY // dtype_width
         n_tiles = ceil_div(N, config.thr_n * vector_size)
         partials = torch.empty(M, n_tiles, dtype=torch.float32, device=logits.device)
-
     cross_entropy_fwd_bwd_(
         logits=logits,
         lses=lses,
@@ -213,6 +214,9 @@ def cross_entropy_fwd_bwd(
     if losses is None:
         # zero-init as the kernel never writes ignored rows' losses
         losses = torch.zeros(logits.shape[0], dtype=torch.float32, device=logits.device)
+    if return_zdz and zdz is None:
+        # no zero-init: the kernel writes per-tile partials and the reduce overwrites every row
+        zdz = torch.empty(logits.shape[0], dtype=torch.float32, device=logits.device)
     _cross_entropy_fwd_bwd(
         logits=logits,
         lses=lses,
@@ -403,15 +407,15 @@ def _qknorm_rope_bwd_tuned(
             h=num_heads_per_group_qkv,
             d=head_dim,
         )
-        torch.sum(
-            dgamma_partials[:, :, :num_heads_per_group_q, :],
-            dim=(0, 1, 2),
+        _sum_reduce_compiled(
+            partials=dgamma_partials[:, :, :num_heads_per_group_q, :],
             out=dgamma[:head_dim],
+            dim=(0, 1, 2),
         )
-        torch.sum(
-            dgamma_partials[:, :, num_heads_per_group_q, :],
-            dim=(0, 1),
+        _sum_reduce_compiled(
+            partials=dgamma_partials[:, :, num_heads_per_group_q, :],
             out=dgamma[head_dim:],
+            dim=(0, 1),
         )
     else:
         dgamma_partials = rearrange(
@@ -421,15 +425,15 @@ def _qknorm_rope_bwd_tuned(
             h=num_heads_qk,
             d=head_dim,
         )
-        torch.sum(
-            dgamma_partials[:, :num_heads_q, :],
-            dim=(0, 1),
+        _sum_reduce_compiled(
+            partials=dgamma_partials[:, :num_heads_q, :],
             out=dgamma[:head_dim],
-        )
-        torch.sum(
-            dgamma_partials[:, num_heads_q:, :],
             dim=(0, 1),
+        )
+        _sum_reduce_compiled(
+            partials=dgamma_partials[:, num_heads_q:, :],
             out=dgamma[head_dim:],
+            dim=(0, 1),
         )
 
 
