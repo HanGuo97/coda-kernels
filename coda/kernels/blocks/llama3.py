@@ -1,3 +1,4 @@
+import os
 import torch
 from einops import rearrange
 from quack.rms_final_reduce import rms_final_reduce as quack_rms_final_reduce
@@ -19,7 +20,7 @@ from coda.core.gemm.functional import (
 )
 
 USE_CODA_GEMM = False
-ALLOW_INPLACE_GRAD_OUTPUT = False
+ALLOW_INPLACE_GRAD_OUTPUT = os.environ.get("CODA_ALLOW_INPLACE_GRAD_OUTPUT", "1") == "1"
 
 
 def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
