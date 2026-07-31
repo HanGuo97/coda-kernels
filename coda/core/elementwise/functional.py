@@ -6,6 +6,7 @@ from einops import rearrange
 from quack.activation import dswiglu
 from quack.autotuner import autotune, AutotuneConfig
 
+from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS, NUM_BITS_PER_COPY
 from coda.core.ops.misc_utils import static_assert, ceil_div
 from coda.core.gemm.gemm_interface import _kernel_op
 from coda.core.elementwise.rope import qknorm_rope_, qknorm_rope_bwd_
@@ -42,6 +43,32 @@ _CE_ELEMENTWISE_CONFIGS = tuple(
     )
 )
 
+_ZDZ_CONFIGS = tuple(
+    ElementwiseConfig(
+        thr_m=thr_m,
+        thr_n=thr_n,
+        val_m=val_m,
+    )
+    for thr_m, thr_n, val_m in (
+        (4, 32, 1),
+        (8, 32, 1),
+        (4, 32, 2),
+        (8, 32, 2),
+        (2, 64, 2),
+        (4, 64, 2),
+        (1, 128, 1),
+        (1, 128, 2),
+        (2, 128, 2),
+        (1, 256, 1),
+        (1, 256, 2),
+    )
+)
+
+# @torch.compile(fullgraph=True, dynamic=False)
+def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int) -> None:
+    assert out.dtype == partials.dtype
+    torch.sum(partials, dim=dim, out=out)
+
 
 def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs) -> list[AutotuneConfig]:
     kwargs = named_args | kwargs
@@ -49,7 +76,7 @@ def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwarg
     assert x.ndim == 2
     packed_cols = x.shape[1] // 2
     dtype_width = x.element_size() * 8
-    vector_size = 128 // (2 * dtype_width)
+    vector_size = NUM_BITS_PER_COPY // (2 * dtype_width)
     configs_pruned = [
         c for c in configs
         if packed_cols % (c.kwargs["config"].thr_n * vector_size) == 0
@@ -113,37 +140,55 @@ def dswiglu_backward(
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _CE_ELEMENTWISE_CONFIGS],
     key=["ignore_index"],
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _cross_entropy_fwd_bwd_tuned(
     logits: torch.Tensor,
     lses: torch.Tensor,
     target: torch.Tensor,
     losses: torch.Tensor,
+    zdz: torch.Tensor | None,
     ignore_index: int,
     config: ElementwiseConfig | None,
 ) -> None:
     if config is None:
         config = ElementwiseConfig(thr_m=4, thr_n=32, val_m=4)
 
+    if zdz is None:
+        partials = None
+    else:
+        M, N = logits.shape
+        dtype_width = logits.element_size() * 8
+        vector_size = NUM_BITS_PER_COPY // dtype_width
+        n_tiles = ceil_div(N, config.thr_n * vector_size)
+        partials = torch.empty(M, n_tiles, dtype=torch.float32, device=logits.device)
+
     cross_entropy_fwd_bwd_(
         logits=logits,
         lses=lses,
         target=target,
         losses=losses,
+        partials=partials,
         ignore_index=ignore_index,
         thr_m=config.thr_m,
         thr_n=config.thr_n,
         val_m=config.val_m,
     )
+    if zdz is not None:
+        _sum_reduce_compiled(
+            partials=partials,
+            out=zdz,
+            dim=-1,
+        )
 
 
-@_kernel_op("coda::_cross_entropy_fwd_bwd", mutates_args=("logits", "losses"))
+@_kernel_op("coda::_cross_entropy_fwd_bwd", mutates_args=("logits", "losses", "zdz"))
 def _cross_entropy_fwd_bwd(
     logits: torch.Tensor,
     lses: torch.Tensor,
     target: torch.Tensor,
     losses: torch.Tensor,
+    zdz: torch.Tensor | None,
     ignore_index: int,
 ) -> None:
     _cross_entropy_fwd_bwd_tuned(
@@ -151,6 +196,7 @@ def _cross_entropy_fwd_bwd(
         lses=lses,
         target=target,
         losses=losses,
+        zdz=zdz,
         ignore_index=ignore_index,
     )
 
@@ -160,8 +206,10 @@ def cross_entropy_fwd_bwd(
     lses: torch.Tensor,
     target: torch.Tensor,
     ignore_index: int,
+    return_zdz: bool = False,
     losses: torch.Tensor | None = None,
-) -> torch.Tensor:
+    zdz: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     if losses is None:
         # zero-init as the kernel never writes ignored rows' losses
         losses = torch.zeros(logits.shape[0], dtype=torch.float32, device=logits.device)
@@ -170,16 +218,17 @@ def cross_entropy_fwd_bwd(
         lses=lses,
         target=target,
         losses=losses,
+        zdz=zdz,
         ignore_index=ignore_index,
     )
-    return losses
+    return losses, zdz
 
 
 @autotune(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
     key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps", "interleaved"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _qknorm_rope_fwd_tuned(
     x: torch.Tensor,
@@ -288,7 +337,7 @@ def qknorm_rope_fwd(
     configs=[AutotuneConfig(config=c) for c in _ELEMENTWISE_CONFIGS],
     key=["head_dim", "num_heads_q", "num_heads_k", "num_segments", "eps", "interleaved"],
     prune_configs_by={"early_config_prune": _prune_rope_configs},
-    cache_results=False,
+    cache_results=AUTOTUNE_CACHE_RESULTS,
 )
 def _qknorm_rope_bwd_tuned(
     dx: torch.Tensor,
