@@ -1,4 +1,3 @@
-import os
 import copy
 import torch
 import functools
@@ -34,7 +33,6 @@ from quack.gemm_tvm_ffi_utils import (
 )
 from coda.core.ops.torch_utils import preprocess_tensor
 from coda.core.epilogue.utils import compile_epi_args, process_epi_args
-from coda.core.ops.constants import AUTOTUNE_CACHE_RESULTS
 
 
 def _extend_configs(
