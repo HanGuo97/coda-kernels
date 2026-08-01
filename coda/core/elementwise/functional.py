@@ -108,7 +108,7 @@ def _prune_rope_bwd_zdz_configs(configs: list[AutotuneConfig], named_args: dict,
     vector_size = NUM_BITS_PER_COPY // (2 * dtype_width)
     return [
         c for c in configs
-        if (packed_cols % (c.kwargs["config"].thr_n * vector_size)) == 0
+        if packed_cols % (c.kwargs["config"].thr_n * vector_size) == 0
     ]
 
 
