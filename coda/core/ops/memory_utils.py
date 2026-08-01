@@ -251,7 +251,9 @@ def copy(
             shape=shape,
         )
     elif cutlass.const_expr(len(shape) == 2):
-        if cutlass.const_expr(dst.memspace.name != "smem"):
+        # a skipped element is left unwritten: fine for rmem and gmem, but a shared staging
+        # space is read by threads that cannot tell, so it needs a fill (e.g., quack's fill_oob)
+        if cutlass.const_expr(dst.memspace in (cute.AddressSpace.rmem, cute.AddressSpace.gmem)):
             dim = None
         else:
             dim = -1
