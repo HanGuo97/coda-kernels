@@ -28,6 +28,7 @@ class MemoryCopyStruct(NamedTuple):
     dst_thread: cute.Tensor
     crd_thread: cute.Tensor
     allocation: cute.Tensor | None
+    predication: cute.Tensor | None
 
 
 def prepare_copy(
@@ -182,6 +183,7 @@ def copy(
     config: MemoryCopyConfig,
     thread_index: int | cute.Int32,
     smem_allocator: cutlass.utils.SmemAllocator,
+    predication: cute.Tensor | None = None,
     filter_zeros: cutlass.Constexpr = False,
 ) -> MemoryCopyStruct:
 
@@ -294,6 +296,7 @@ def copy(
         dst_thread=dst_thread,
         crd_thread=crd_thread,
         allocation=allocation,
+        predication=pred_thread,
     )
 
 
