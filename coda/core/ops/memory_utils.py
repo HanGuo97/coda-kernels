@@ -369,6 +369,7 @@ def simple_copy(
         dst_thread=dst,
         crd_thread=crd,
         allocation=allocation,
+        predication=None,
     )
 
 
