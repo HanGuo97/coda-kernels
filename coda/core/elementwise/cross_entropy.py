@@ -6,11 +6,10 @@ from typing import Callable
 
 from quack.cache import jit_cache
 from quack.cute_dsl_utils import torch2cute_dtype_map
+from coda.core.ops.constants import NUM_BITS_PER_COPY
 from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
-
-_NUM_BITS = 128
 
 
 @cute.kernel
@@ -19,6 +18,7 @@ def cross_entropy_fwd_bwd_kernel(
     mLSE: cute.Tensor,
     mTarget: cute.Tensor,
     mLoss: cute.Tensor,
+    mZdZ: cute.Tensor | None,
     ignore_index: cutlass.Constexpr[int],
     tiler_mn: cute.Shape,
     tv_layout: cute.Layout,
@@ -34,7 +34,7 @@ def cross_entropy_fwd_bwd_kernel(
     cLogits = cute.local_tile(idLogits, tiler_mn, (bidx, bidy))
 
     is_full_tile = cutlass.const_expr(mLogits.shape[1] % tiler_mn[1] == 0)
-    misc_utils.static_assert(vector_size == _NUM_BITS // mLogits.element_type.width)
+    misc_utils.static_assert(vector_size == NUM_BITS_PER_COPY // mLogits.element_type.width)
 
     config = memory_utils.MemoryCopyConfig(
         op="universal",
@@ -97,17 +97,20 @@ def _cross_entropy_fwd_bwd(
     mLSE: cute.Tensor,
     mTarget: cute.Tensor,
     mLoss: cute.Tensor,
+    mZdZ: cute.Tensor | None,
     ignore_index: cutlass.Constexpr[int],
     thr_m: cutlass.Constexpr[int],
     thr_n: cutlass.Constexpr[int],
     val_m: cutlass.Constexpr[int],
     stream: cuda.CUstream,
 ) -> int:
-    vector_size = cutlass.const_expr(_NUM_BITS // mLogits.element_type.width)
+    vector_size = cutlass.const_expr(NUM_BITS_PER_COPY // mLogits.element_type.width)
     misc_utils.static_assert(len(mLogits.shape) == 2)
     misc_utils.static_assert(len(mLSE.shape) == 1)
     misc_utils.static_assert(len(mTarget.shape) == 1)
     misc_utils.static_assert(len(mLoss.shape) == 1)
+    if cutlass.const_expr(mZdZ is not None):
+        misc_utils.static_assert(len(mZdZ.shape) == 2)
     misc_utils.static_assert(mLogits.shape[1] % vector_size == 0)
     tiler_mn, tv_layout = layout_utils.make_layout_tv_from_shape(
         thread_shape=(thr_m, thr_n),
@@ -126,6 +129,7 @@ def _cross_entropy_fwd_bwd(
         mLSE=mLSE,
         mTarget=mTarget,
         mLoss=mLoss,
+        mZdZ=mZdZ,
         ignore_index=ignore_index,
         tiler_mn=tiler_mn,
         tv_layout=tv_layout,
@@ -145,6 +149,7 @@ def _cross_entropy_fwd_bwd(
 @jit_cache
 def _compile_cross_entropy_fwd_bwd(
     vocab_size: int,
+    n_tiles: int | None,
     ignore_index: int,
     logits_dtype: type[cute.Numeric],
     target_dtype: type[cute.Numeric],
@@ -152,8 +157,8 @@ def _compile_cross_entropy_fwd_bwd(
     thr_n: int,
     val_m: int,
 ) -> Callable:
-    m = cute.sym_int(divisibility=thr_m * val_m)
-    vector_size = cutlass.const_expr(_NUM_BITS // logits_dtype.width)
+    m = cute.sym_int()
+    vector_size = cutlass.const_expr(NUM_BITS_PER_COPY // logits_dtype.width)
     target_align = cutlass.const_expr(target_dtype.width // 8)
     mLogits = cute.runtime.make_fake_tensor(
         dtype=logits_dtype,
@@ -179,6 +184,15 @@ def _compile_cross_entropy_fwd_bwd(
         stride=(1,),
         assumed_align=4,
     )
+    if n_tiles is None:
+        mZdZ = None
+    else:
+        mZdZ = cute.runtime.make_fake_tensor(
+            dtype=cute.Float32,
+            shape=(m, n_tiles),
+            stride=(n_tiles, 1),
+            assumed_align=4,
+        )
     stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     return cute.compile(
         _cross_entropy_fwd_bwd,
@@ -186,6 +200,7 @@ def _compile_cross_entropy_fwd_bwd(
         mLSE=mLSE,
         mTarget=mTarget,
         mLoss=mLoss,
+        mZdZ=mZdZ,
         ignore_index=ignore_index,
         thr_m=thr_m,
         thr_n=thr_n,
@@ -200,6 +215,7 @@ def cross_entropy_fwd_bwd_(
     lses: torch.Tensor,
     target: torch.Tensor,
     losses: torch.Tensor,
+    partials: torch.Tensor | None,
     ignore_index: int,
     thr_m: int,
     thr_n: int,
@@ -208,6 +224,7 @@ def cross_entropy_fwd_bwd_(
     assert target.dtype == torch.int32
     fn = _compile_cross_entropy_fwd_bwd(
         vocab_size=logits.shape[1],
+        n_tiles=partials.shape[1] if partials is not None else None,
         ignore_index=ignore_index,
         logits_dtype=torch2cute_dtype_map[logits.dtype],
         target_dtype=torch2cute_dtype_map[target.dtype],
@@ -215,4 +232,4 @@ def cross_entropy_fwd_bwd_(
         thr_n=thr_n,
         val_m=val_m,
     )
-    fn(logits, lses, target, losses)
+    fn(logits, lses, target, losses, partials)
