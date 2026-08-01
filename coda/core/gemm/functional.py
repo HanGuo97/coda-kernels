@@ -37,7 +37,6 @@ from coda.core.gemm.registry import (
 
 _DEVICE_CAPACITY = 9
 assert get_device_capacity()[0] == _DEVICE_CAPACITY
-torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 128)
 
 
 @autotune(

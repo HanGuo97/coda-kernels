@@ -39,6 +39,7 @@ _CE_ELEMENTWISE_CONFIGS = tuple(
         val_m=val_m,
     )
     for thr_m, thr_n, val_m in (
+        (1, 1024, 2),
         (1, 512, 2),
         (4, 128, 1),
     )
@@ -67,10 +68,14 @@ _ZDZ_CONFIGS = tuple(
 )
 
 
-# @torch.compile(fullgraph=True, dynamic=False)
-def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int | tuple[int, ...]) -> None:
+def _sum_reduce(partials: torch.Tensor, out: torch.Tensor, dim: int | tuple[int, ...]) -> None:
     assert out.dtype == partials.dtype
     torch.sum(partials, dim=dim, out=out)
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def _sum_reduce_compiled(partials: torch.Tensor, out: torch.Tensor, dim: int | tuple[int, ...]) -> None:
+    _sum_reduce(partials=partials, out=out, dim=dim)
 
 
 def _prune_rope_configs(configs: list[AutotuneConfig], named_args: dict, **kwargs) -> list[AutotuneConfig]:
@@ -421,12 +426,12 @@ def _qknorm_rope_bwd_tuned(
             h=num_heads_per_group_qkv,
             d=head_dim,
         )
-        _sum_reduce_compiled(
+        _sum_reduce(
             partials=dgamma_partials[:, :, :num_heads_per_group_q, :],
             out=dgamma[:head_dim],
             dim=(0, 1, 2),
         )
-        _sum_reduce_compiled(
+        _sum_reduce(
             partials=dgamma_partials[:, :, num_heads_per_group_q, :],
             out=dgamma[head_dim:],
             dim=(0, 1),
@@ -439,12 +444,12 @@ def _qknorm_rope_bwd_tuned(
             h=num_heads_qk,
             d=head_dim,
         )
-        _sum_reduce_compiled(
+        _sum_reduce(
             partials=dgamma_partials[:, :num_heads_q, :],
             out=dgamma[:head_dim],
             dim=(0, 1),
         )
-        _sum_reduce_compiled(
+        _sum_reduce(
             partials=dgamma_partials[:, num_heads_q:, :],
             out=dgamma[head_dim:],
             dim=(0, 1),
