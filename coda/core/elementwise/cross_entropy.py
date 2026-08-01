@@ -70,14 +70,12 @@ def cross_entropy_fwd_bwd_kernel(
 
     for row_index in cutlass.range_constexpr(val_m):
         row_coord, _ = tXcLogits[row_index * vector_size]
-        row_valid = row_coord < mLogits.shape[0]
-
-        if not row_valid:
-            lse = mLSE[0]
-            target = mTarget[0]
-        else:
-            lse = mLSE[row_coord]
-            target = mTarget[row_coord]
+        row_in_bound = row_coord < mLogits.shape[0]
+        row_coord_safe = row_coord
+        if not row_in_bound:
+            row_coord_safe = 0
+        lse = mLSE[row_coord_safe]
+        target = mTarget[row_coord_safe]
 
         ignored = target == ignore_index
 
@@ -92,7 +90,7 @@ def cross_entropy_fwd_bwd_kernel(
 
                 if col_coord == target:
                     dlogits = probs - 1.0
-                    if not ignored and row_valid:
+                    if not ignored and row_in_bound:
                         mLoss[row_coord] = lse - logits
 
                 if ignored:
@@ -117,7 +115,7 @@ def cross_entropy_fwd_bwd_kernel(
         zdzs = []
         for row_index in cutlass.range_constexpr(val_m):
             zdz = cute.make_rmem_tensor((1,), cute.Float32)
-            zdz.store(rZdZ[row_index])
+            zdz[0] = rZdZ[row_index]
             zdzs.append(zdz.load())
         zdzs_reduced, _ = reduction_utils.reduce(
             zdzs,
@@ -128,9 +126,9 @@ def cross_entropy_fwd_bwd_kernel(
         )
         for row_index in cutlass.range_constexpr(val_m):
             row_coord, _ = tXcLogits[row_index * vector_size]
-            row_valid = row_coord < mLogits.shape[0]
-            if ((tidx % thr_n) == 0) and row_valid:
-                mZdZ[row_coord, bidy] = zdzs_reduced[row_index].to(dtype=mZdZ.element_type)
+            row_in_bound = row_coord < mLogits.shape[0]
+            if ((tidx % thr_n) == 0) and row_in_bound:
+                mZdZ[row_coord, bidy] = zdzs_reduced[row_index]
 
 
 @cute.jit
