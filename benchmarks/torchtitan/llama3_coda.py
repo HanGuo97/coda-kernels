@@ -1,6 +1,7 @@
 import os
 import torch
 from einops import rearrange
+from torchtitan.models.llama3.model.args import TransformerModelArgs
 from flash_attn_interface import flash_attn_qkvpacked_func
 from coda.kernels.blocks.llama3 import block, block_post, block_pre
 
@@ -9,6 +10,18 @@ _FA3_DETERMINISTIC = os.environ.get("CODA_FA3_DETERMINISTIC", "0") == "1"
 
 
 class CodaRuntime(object):
+
+    def __init__(self, model_args: TransformerModelArgs) -> None:
+        self.num_heads = model_args.n_heads
+        self.num_kv_heads = (
+            model_args.n_heads
+            if model_args.n_kv_heads is None
+            else model_args.n_kv_heads
+        )
+        self.head_dim = model_args.dim // model_args.n_heads
+        self.norm_eps = model_args.norm_eps
+        self.num_layers = model_args.n_layers
+        self.attention_scale = self.head_dim**-0.5
 
     def forward(
         self,
@@ -30,7 +43,7 @@ class CodaRuntime(object):
             wn=layers[0].attention_norm.weight,
             positions=positions,
             frequencies=frequencies,
-            eps=self.eps,
+            eps=self.norm_eps,
         )
         for layer_id in range(self.num_layers - 1):
             layer = layers[layer_id]
@@ -47,7 +60,7 @@ class CodaRuntime(object):
                 wn1=layer_next.attention_norm.weight,
                 positions=positions,
                 frequencies=frequencies,
-                eps=self.eps,
+                eps=self.norm_eps,
             )
 
         layer_last = layers[-1]
@@ -62,7 +75,7 @@ class CodaRuntime(object):
             wn0=layer_last.ffn_norm.weight,
             wn1=model.norm.weight,
             targets=targets,
-            eps=self.eps,
+            eps=self.norm_eps,
             ignore_index=_IGNORE_INDEX,
             reduction="sum",
         )
@@ -76,7 +89,7 @@ class CodaRuntime(object):
         )
         o = flash_attn_qkvpacked_func(
             qkv=qkv_view,
-            softmax_scale=self.scale,
+            softmax_scale=self.attention_scale,
             causal=True,
             deterministic=_FA3_DETERMINISTIC,
             num_heads_q=self.num_heads,
