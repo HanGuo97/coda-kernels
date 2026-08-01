@@ -87,7 +87,7 @@ def prepare_predicate_1D(
         order="col",  # not sure if row or col
         memspace="rmem",
         smem_allocator=None,
-        dtype=cutlass.Boolean,
+        dtype=cute.Boolean,
     )
     for rest_v in cutlass.range_constexpr(pred_thread.shape[0]):
         for i in cutlass.range_constexpr(pred_thread.shape[1]):
