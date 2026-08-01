@@ -1,29 +1,31 @@
+import os
 import torch
 from einops import rearrange
 from flash_attn_interface import flash_attn_qkvpacked_func
 from coda.kernels.blocks.llama3 import block, block_post, block_pre
 
+_IGNORE_INDEX = -100
+_FA3_DETERMINISTIC = os.environ.get("CODA_FA3_DETERMINISTIC", "0") == "1"
+
 
 class CodaRuntime(object):
 
     def forward(self, model: torch.nn.Module, tokens: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        layers = [model.layers[str(layer_id)] for layer_id in range(model.n_layers)]
+        layers = [model.layers[str(layer_id)] for layer_id in range(self.num_layers)]
+
         h = model.tok_embeddings(tokens)
         h, qkv = block_pre(
             x=h,
             w=layers[0].attention.wqkv.weight,
             wn=layers[0].attention_norm.weight,
             positions=positions,
-            frequencies=frequencies,
+            frequencies=self.frequencies,
             eps=self.eps,
         )
-        for layer_id in range(model.n_layers - 1):
+        for layer_id in range(self.num_layers - 1):
             layer = layers[layer_id]
             layer_next = layers[layer_id + 1]
-            o = self._attention(
-                qkv=qkv,
-                layer=layer,
-            )
+            o = self._attention(qkv=qkv)
             h, qkv = block(
                 x0=h,
                 y0=o,
@@ -34,15 +36,12 @@ class CodaRuntime(object):
                 wn0=layer.ffn_norm.weight,
                 wn1=layer_next.attention_norm.weight,
                 positions=positions,
-                frequencies=frequencies,
+                frequencies=self.frequencies,
                 eps=self.eps,
             )
 
         layer_last = layers[-1]
-        o = self._attention(
-            qkv=qkv,
-            layer=layer_last,
-        )
+        o = self._attention(qkv=qkv)
         return block_post(
             x0=h,
             y0=o,
@@ -55,21 +54,21 @@ class CodaRuntime(object):
             targets=targets,
             eps=self.eps,
             ignore_index=_IGNORE_INDEX,
-            reduction="mean",
+            reduction="sum",
         )
 
-    def _attention(self, qkv: torch.Tensor, layer: torch.nn.Module) -> torch.Tensor:
+    def _attention(self, qkv: torch.Tensor) -> torch.Tensor:
         qkv_view = rearrange(
             qkv,
             "b t (h d) -> b t h d",
-            h=layer.attention.n_heads + 2 * layer.attention.n_kv_heads,
-            d=layer.attention.head_dim,
+            h=self.num_heads + 2 * self.num_kv_heads,
+            d=self.head_dim,
         )
         o = flash_attn_qkvpacked_func(
             qkv=qkv_view,
             softmax_scale=self.scale,
             causal=True,
             deterministic=_FA3_DETERMINISTIC,
-            num_heads_q=layer.attention.n_heads,
+            num_heads_q=self.num_heads,
         )
         return rearrange(o, "b t h d -> b t (h d)")
