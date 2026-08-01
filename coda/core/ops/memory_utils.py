@@ -246,27 +246,53 @@ def copy(
         assert cutlass.const_expr(src_block.element_type == dst_block.element_type)
 
     if cutlass.const_expr(len(shape) == 1):
-        pred_thread = prepare_predicate_1D(
-            src_thread=src_thread,
-            dst_thread=dst_thread,
-            crd_thread=crd_thread,
-            shape=shape,
-        )
-    elif cutlass.const_expr(len(shape) == 2):
-        # skipped elements are left unwritten, which only rmem and gmem tolerate: shared
-        # staging is read by threads that cannot tell, and would need a fill first
-        if cutlass.const_expr(dst.memspace in (cute.AddressSpace.rmem, cute.AddressSpace.gmem)):
-            dim = None
+        if cutlass.const_expr(predication is not None):
+            misc_utils.static_assert(predication.element_type == cute.Boolean)
+            misc_utils.static_assert(
+                predication.shape ==
+                (
+                    cute.size(crd_thread, mode=[0, 1]),
+                    cute.size(crd_thread, mode=[1]),
+                )
+            )
+            pred_thread = predication
         else:
-            dim = -1
-        pred_thread = prepare_predicate_2D(
-            src_thread=src_thread,
-            dst_thread=dst_thread,
-            crd_thread=crd_thread,
-            shape=shape,
-            dim=dim,
-        )
+            pred_thread = prepare_predicate_1D(
+                src_thread=src_thread,
+                dst_thread=dst_thread,
+                crd_thread=crd_thread,
+                shape=shape,
+            )
+
+    elif cutlass.const_expr(len(shape) == 2):
+        if cutlass.const_expr(predication is not None):
+            misc_utils.static_assert(predication.element_type == cute.Boolean)
+            misc_utils.static_assert(
+                predication.shape ==
+                (
+                    cute.size(crd_thread, mode=[0, 1]),
+                    cute.size(crd_thread, mode=[1]),
+                    cute.size(crd_thread, mode=[2]),
+                )
+            )
+            pred_thread = predication
+        else:
+            # skipped elements are left unwritten, which only rmem and gmem tolerate: shared
+            # staging is read by threads that cannot tell, and would need a fill first
+            if cutlass.const_expr(dst.memspace in (cute.AddressSpace.rmem, cute.AddressSpace.gmem)):
+                dim = None
+            else:
+                dim = -1
+            pred_thread = prepare_predicate_2D(
+                src_thread=src_thread,
+                dst_thread=dst_thread,
+                crd_thread=crd_thread,
+                shape=shape,
+                dim=dim,
+            )
+
     else:
+        misc_utils.static_assert(predication is None)
         # not implemented yet
         pred_thread = None
 
