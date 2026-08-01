@@ -1,8 +1,8 @@
 import os
 import torch
 from einops import rearrange
-from torchtitan.models.llama3.model.args import TransformerModelArgs
 from flash_attn_interface import flash_attn_qkvpacked_func
+from torchtitan.models.llama3 import TransformerModelArgs
 from coda.kernels.blocks.llama3 import block, block_post, block_pre
 
 _IGNORE_INDEX = -100
