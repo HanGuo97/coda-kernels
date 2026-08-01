@@ -139,6 +139,17 @@ def prepare_predicate_2D(
                     shape[1],
                 )
 
+    elif cutlass.const_expr(dim is None):
+        pred_thread = cute.make_rmem_tensor(
+            crd_thread.shape,
+            dtype=cute.Boolean,
+        )
+        for i in cutlass.range_constexpr(cute.size(pred_thread)):
+            pred_thread[i] = cute.elem_less(
+                crd_thread[i],
+                shape,
+            )
+
     else:
         raise NotImplementedError
 
