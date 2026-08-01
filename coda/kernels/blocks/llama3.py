@@ -1,9 +1,9 @@
-import os
 import torch
 from einops import rearrange
 from quack.rms_final_reduce import rms_final_reduce as quack_rms_final_reduce
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
+from coda.core.ops.constants import ALLOW_INPLACE_GRAD_OUTPUT
 from coda.core.elementwise.functional import (
     cross_entropy_fwd_bwd,
     rope_bwd_zdz,
@@ -20,7 +20,6 @@ from coda.core.gemm.functional import (
 )
 
 USE_CODA_GEMM = False
-ALLOW_INPLACE_GRAD_OUTPUT = os.environ.get("CODA_ALLOW_INPLACE_GRAD_OUTPUT", "1") == "1"
 
 
 def gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
