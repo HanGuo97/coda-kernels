@@ -251,12 +251,16 @@ def copy(
             shape=shape,
         )
     elif cutlass.const_expr(len(shape) == 2):
+        if cutlass.const_expr(dst.memspace.name != "smem"):
+            dim = None
+        else:
+            dim = -1
         pred_thread = prepare_predicate_2D(
             src_thread=src_thread,
             dst_thread=dst_thread,
             crd_thread=crd_thread,
             shape=shape,
-            dim=-1,
+            dim=dim,
         )
     else:
         # not implemented yet
