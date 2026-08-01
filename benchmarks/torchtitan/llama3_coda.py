@@ -10,8 +10,18 @@ _FA3_DETERMINISTIC = os.environ.get("CODA_FA3_DETERMINISTIC", "0") == "1"
 
 class CodaRuntime(object):
 
-    def forward(self, model: torch.nn.Module, tokens: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        layers = [model.layers[str(layer_id)] for layer_id in range(self.num_layers)]
+    def forward(
+        self,
+        model: torch.nn.Module,
+        tokens: torch.Tensor,
+        targets: torch.Tensor,
+        positions: torch.Tensor,
+        frequencies: torch.Tensor,
+    ) -> torch.Tensor:
+        layers = [
+            model.layers[str(layer_id)]
+            for layer_id in range(self.num_layers)
+        ]
 
         h = model.tok_embeddings(tokens)
         h, qkv = block_pre(
@@ -19,7 +29,7 @@ class CodaRuntime(object):
             w=layers[0].attention.wqkv.weight,
             wn=layers[0].attention_norm.weight,
             positions=positions,
-            frequencies=self.frequencies,
+            frequencies=frequencies,
             eps=self.eps,
         )
         for layer_id in range(self.num_layers - 1):
@@ -36,7 +46,7 @@ class CodaRuntime(object):
                 wn0=layer.ffn_norm.weight,
                 wn1=layer_next.attention_norm.weight,
                 positions=positions,
-                frequencies=self.frequencies,
+                frequencies=frequencies,
                 eps=self.eps,
             )
 
