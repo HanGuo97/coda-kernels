@@ -140,15 +140,32 @@ def prepare_predicate_2D(
                 )
 
     elif cutlass.const_expr(dim is None):
-        pred_thread = cute.make_rmem_tensor(
-            crd_thread.shape,
+        pred_layout = cute.make_layout(
+            (
+                cute.size(crd_thread, mode=[0, 1]),
+                cute.size(crd_thread, mode=[1]),
+                cute.size(crd_thread, mode=[2]),
+            ),
+            stride=(
+                cute.size(crd_thread, mode=[1]) * cute.size(crd_thread, mode=[2]),
+                cute.size(crd_thread, mode=[2]),
+                1,
+            ),
+        )
+        pred_thread = creation_utils.allocate_tensor_from_layout(
+            pred_layout,
+            memspace="rmem",
+            smem_allocator=None,
             dtype=cute.Boolean,
         )
-        for i in cutlass.range_constexpr(cute.size(pred_thread)):
-            pred_thread[i] = cute.elem_less(
-                crd_thread[i],
-                shape,
-            )
+        for rest_v in cutlass.range_constexpr(pred_thread.shape[0]):
+            for rest_m in cutlass.range_constexpr(pred_thread.shape[1]):
+                for rest_dim in cutlass.range_constexpr(pred_thread.shape[2]):
+                    # `elem_less` compares the whole coordinate tuple
+                    pred_thread[rest_v, rest_m, rest_dim] = cute.elem_less(
+                        crd_thread[(0, rest_v), rest_m, rest_dim],
+                        shape,
+                    )
 
     else:
         raise NotImplementedError
