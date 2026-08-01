@@ -105,7 +105,7 @@ def prepare_predicate_2D(
     dst_thread: cute.Tensor,
     crd_thread: cute.Tensor,
     shape: cute.Shape,
-    dim: int,
+    dim: int | None,
 ) -> cute.Tensor:
     misc_utils.static_assert(src_thread.shape == dst_thread.shape == crd_thread.shape)
     misc_utils.static_assert(len(shape) == 2)
@@ -251,8 +251,8 @@ def copy(
             shape=shape,
         )
     elif cutlass.const_expr(len(shape) == 2):
-        # a skipped element is left unwritten: fine for rmem and gmem, but a shared staging
-        # space is read by threads that cannot tell, so it needs a fill (e.g., quack's fill_oob)
+        # skipped elements are left unwritten, which only rmem and gmem tolerate: shared
+        # staging is read by threads that cannot tell, and would need a fill first
         if cutlass.const_expr(dst.memspace in (cute.AddressSpace.rmem, cute.AddressSpace.gmem)):
             dim = None
         else:
