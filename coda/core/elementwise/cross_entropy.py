@@ -10,6 +10,8 @@ from coda.core.ops.constants import NUM_BITS_PER_COPY
 from coda.core.ops import misc_utils
 from coda.core.ops import layout_utils
 from coda.core.ops import memory_utils
+from coda.core.ops import creation_utils
+from coda.core.ops import reduction_utils
 
 
 @cute.kernel
@@ -22,6 +24,8 @@ def cross_entropy_fwd_bwd_kernel(
     ignore_index: cutlass.Constexpr[int],
     tiler_mn: cute.Shape,
     tv_layout: cute.Layout,
+    thr_m: cutlass.Constexpr[int],
+    thr_n: cutlass.Constexpr[int],
     val_m: cutlass.Constexpr[int],
     vector_size: cutlass.Constexpr[int],
 ) -> None:
@@ -55,10 +59,26 @@ def cross_entropy_fwd_bwd_kernel(
     tXrLogits = copy_outputs.dst_thread
     tXcLogits = copy_outputs.crd_thread
 
+    if cutlass.const_expr(mZdZ is not None):
+        rZdZ = creation_utils.allocate_tensor_from_shape(
+            shape=(val_m,),
+            order="row",
+            dtype=cute.Float32,
+            memspace="rmem",
+        )
+        rZdZ.fill(value=0.0)
+
     for row_index in cutlass.range_constexpr(val_m):
         row_coord, _ = tXcLogits[row_index * vector_size]
-        lse = mLSE[row_coord]
-        target = mTarget[row_coord]
+        row_valid = row_coord < mLogits.shape[0]
+
+        if not row_valid:
+            lse = mLSE[0]
+            target = mTarget[0]
+        else:
+            lse = mLSE[row_coord]
+            target = mTarget[row_coord]
+
         ignored = target == ignore_index
 
         for col_index in cutlass.range_constexpr(vector_size):
@@ -72,11 +92,14 @@ def cross_entropy_fwd_bwd_kernel(
 
                 if col_coord == target:
                     dlogits = probs - 1.0
-                    if not ignored:
+                    if not ignored and row_valid:
                         mLoss[row_coord] = lse - logits
 
                 if ignored:
                     dlogits = cute.Float32.zero
+
+                if cutlass.const_expr(mZdZ is not None):
+                    rZdZ[row_index] = rZdZ[row_index] + logits * dlogits
 
                 tXrLogits[flat_index] = dlogits.to(dtype=tXrLogits.element_type)
 
@@ -89,6 +112,25 @@ def cross_entropy_fwd_bwd_kernel(
         thread_index=tidx,
         smem_allocator=allocator,
     )
+
+    if cutlass.const_expr(mZdZ is not None):
+        zdzs = []
+        for row_index in cutlass.range_constexpr(val_m):
+            zdz = cute.make_rmem_tensor((1,), cute.Float32)
+            zdz.store(rZdZ[row_index])
+            zdzs.append(zdz.load())
+        zdzs_reduced, _ = reduction_utils.reduce(
+            zdzs,
+            op="add",
+            thread_shape=(thr_m, thr_n),
+            smem_allocator=allocator,
+            reduction_buffer=None,
+        )
+        for row_index in cutlass.range_constexpr(val_m):
+            row_coord, _ = tXcLogits[row_index * vector_size]
+            row_valid = row_coord < mLogits.shape[0]
+            if ((tidx % thr_n) == 0) and row_valid:
+                mZdZ[row_coord, bidy] = zdzs_reduced[row_index].to(dtype=mZdZ.element_type)
 
 
 @cute.jit
@@ -133,6 +175,8 @@ def _cross_entropy_fwd_bwd(
         ignore_index=ignore_index,
         tiler_mn=tiler_mn,
         tv_layout=tv_layout,
+        thr_m=thr_m,
+        thr_n=thr_n,
         val_m=val_m,
         vector_size=vector_size,
     )
