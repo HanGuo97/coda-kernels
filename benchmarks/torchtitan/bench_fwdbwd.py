@@ -3,9 +3,12 @@ import sys
 import json
 import torch
 import argparse
+from typing import Callable
 from triton.testing import do_bench
-
+from torchtitan.components.loss import IGNORE_INDEX
 from torchtitan.models.llama3 import Transformer, TransformerModelArgs
+
+from benchmarks.torchtitan import liger_utils
 
 
 _BATCH = 4
@@ -35,3 +38,35 @@ def build(seed: int) -> Transformer:
     for parameter in model.parameters():
         parameter.data = parameter.data.to(dtype=torch.bfloat16)
     return model
+
+
+def bf16_cross_entropy_loss(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return torch.nn.functional.cross_entropy(
+        pred.flatten(0, 1),
+        targets.flatten(0, 1),
+        reduction="sum",
+        ignore_index=IGNORE_INDEX,
+    )
+
+
+def make_forward(
+    name: str,
+    model: Transformer,
+    positions: torch.Tensor,
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    if name == "coda":
+        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            return model(tokens=tokens, targets=targets, positions=positions)
+        return _forward
+
+    if name == "liger":
+        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            return liger_utils.cross_entropy(pred=model(tokens), targets=targets)
+        return _forward
+
+    if name == "torch":
+        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            return bf16_cross_entropy_loss(pred=model(tokens), targets=targets)
+        return _forward
+
+    raise NotImplementedError
