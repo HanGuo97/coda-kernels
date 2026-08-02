@@ -1,18 +1,20 @@
 import os
-import sys
 import json
 import torch
 import argparse
 from typing import Callable
-from triton.testing import do_bench
 from torchtitan.components.loss import IGNORE_INDEX
 from torchtitan.models.llama3 import Transformer, TransformerModelArgs
 
+from benchmarks import bench_utils
 from benchmarks.torchtitan import liger_utils
 
 
 _BATCH = 4
 _LENGTH = 8192
+
+_NUM_WARMUP = 10
+_NUM_ITERATIONS = 30
 _NUM_TRACE_WARMUP = 3
 _NUM_TRACE_ITERATIONS = 5
 
@@ -121,3 +123,9 @@ def main() -> None:
         profiler.export_chrome_trace(args.trace)
         print(f"{args.name:<6} trace -> {args.trace}")
         return
+
+    results = bench_utils.do_bench_count(
+        forward_backward,
+        warmup=_NUM_WARMUP,
+        rep=_NUM_ITERATIONS,
+    )
