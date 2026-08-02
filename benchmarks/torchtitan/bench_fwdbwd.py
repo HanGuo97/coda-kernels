@@ -13,6 +13,8 @@ from benchmarks.torchtitan import liger_utils
 
 _BATCH = 4
 _LENGTH = 8192
+_NUM_TRACE_WARMUP = 3
+_NUM_TRACE_ITERATIONS = 5
 
 
 @torch.no_grad()
@@ -49,24 +51,73 @@ def bf16_cross_entropy_loss(pred: torch.Tensor, targets: torch.Tensor) -> torch.
     )
 
 
-def make_forward(
+def make_forward_fn(
     name: str,
     model: Transformer,
     positions: torch.Tensor,
+    compile_mode: str | None,
 ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
     if name == "coda":
-        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        def _fn(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
             return model(tokens=tokens, targets=targets, positions=positions)
-        return _forward
 
-    if name == "liger":
-        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    elif name == "liger":
+        def _fn(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
             return liger_utils.cross_entropy(pred=model(tokens), targets=targets)
-        return _forward
 
-    if name == "torch":
-        def _forward(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    elif name == "torch":
+        def _fn(tokens: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
             return bf16_cross_entropy_loss(pred=model(tokens), targets=targets)
-        return _forward
 
-    raise NotImplementedError
+    else:
+        raise NotImplementedError
+
+    if compile_mode is not None:
+        compile_kwargs: dict[str, bool | str] = {
+            "dynamic": False,
+            "fullgraph": True,
+        }
+        if compile_mode != "default":
+            compile_kwargs["mode"] = compile_mode
+        fn_maybe_compiled = torch.compile(_fn, **compile_kwargs)
+    else:
+        fn_maybe_compiled = _fn
+
+    return fn_maybe_compiled
+
+
+def main() -> None:
+    forward_fn = make_forward_fn(
+        name=args.name,
+        model=model,
+        positions=positions,
+        compile_mode=args.compile,
+    )
+
+    parameters = [
+        parameter
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    ]
+
+    def forward_backward() -> torch.Tensor:
+        loss = forward_fn(tokens=tokens, targets=targets)
+        torch.autograd.grad(outputs=loss, inputs=parameters)
+        return loss
+
+    if args.trace is not None:
+        for _ in range(_NUM_TRACE_WARMUP):
+            forward_backward()
+
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+        ) as profiler:
+            for _ in range(_NUM_TRACE_ITERATIONS):
+                forward_backward()
+
+        profiler.export_chrome_trace(args.trace)
+        print(f"{args.name:<6} trace -> {args.trace}")
+        return
