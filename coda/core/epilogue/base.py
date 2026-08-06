@@ -6,8 +6,8 @@ from typing import Iterable, NamedTuple
 
 from quack.gemm_sm90 import GemmSm90
 from quack.cute_dsl_utils import mlir_namedtuple, ParamsBase
-from quack.epi_ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, VecReduce, EpiOp
-from quack.epi_composable import ComposableEpiMixin
+from quack.epilogue.ops import Scalar, RowVecLoad, ColVecLoad, TileStore, TileLoad, VecReduce, EpiOp
+from quack.epilogue.mixin import ComposableEpiMixin
 from quack.rounding import RoundingMode
 
 from coda.core.ops import misc_utils
@@ -43,9 +43,6 @@ class Epilogue(object):
     ) -> tuple[cute.Tensor, ...]:
         return ()
 
-    def auxiliary_mixin(self) -> type | None:
-        return None
-
     def bind(self, name: str, gemm_cls: type, module: str | None = None) -> type:
         cls = _lower(self, name=name, gemm_cls=gemm_cls)
 
@@ -73,20 +70,6 @@ class _Composite(Epilogue):
 
     def declare_constexprs(self) -> tuple[Const, ...]:
         return tuple(c for child in self._children for c in child.declare_constexprs())
-
-    def auxiliary_mixin(self) -> type | None:
-        mixins = []
-        for child in self._children:
-            mixin = child.auxiliary_mixin()
-            if mixin is not None and mixin not in mixins:
-                mixins.append(mixin)
-        if len(mixins) == 1:
-            return mixins[0]
-        elif len(mixins) == 0:
-            return None
-        else:
-            # only one non-default aux-store mixin can be composed onto the driver
-            raise NotImplementedError
 
     @cute.jit
     def visit(
@@ -260,12 +243,7 @@ def _lower(epilogue: Epilogue, name: str, gemm_cls: type) -> type:
                 tRS_rC=tRS_rC,
             )
 
-    if aux_op is not None:
-        mixin = epilogue.auxiliary_mixin()
-        assert mixin is not None
-        bases = (EpiMixin, mixin, gemm_cls)
-    else:
-        bases = (EpiMixin, gemm_cls)
+    bases = (EpiMixin, gemm_cls)
 
     # https://github.com/Dao-AILab/quack/blob/v0.5.2/quack/gemm_act.py#L295
     return type(name, bases, {})
