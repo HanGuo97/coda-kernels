@@ -3,6 +3,7 @@ from quack.activation import dswiglu, swiglu
 from quack.epilogue.math import F2, Pair, pack, unpack
 from quack.epilogue.frontend import gemm_epilogue
 from quack.epilogue.ops import (
+    Scalar,
     ColVecLoad,
 )
 
@@ -21,6 +22,6 @@ def rstd_epi(acc: EpiValue, rstd: EpiValue) -> EpiOut:
     return {"D": acc * rstd}
 
 
-@gemm_epilogue()
+@gemm_epilogue(ops={"alpha": Scalar("alpha")})
 def alpha_epi(acc: EpiValue, alpha: EpiValue) -> EpiOut:
     return {"D": acc * alpha}
