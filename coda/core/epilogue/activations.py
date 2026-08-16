@@ -27,3 +27,25 @@ def alpha_epi(acc: EpiValue, alpha: EpiValue) -> EpiOut:
 def swiglu_preact_epi(acc: EpiValue) -> EpiOut:
     gate, up = unpack(acc)
     return {"D": acc, "postact": swiglu(gate, up)}
+
+
+@gemm_epilogue(
+    outputs=("postact",),
+    ops={"rstd": ColVecLoad("rstd")},
+    mode="acc_pair",
+)
+def rstd_swiglu_scaled_preact_epi(acc: EpiValue, rstd: EpiValue) -> EpiOut:
+    scaled = acc * rstd
+    gate, up = unpack(scaled)
+    return {"D": scaled, "postact": swiglu(gate, up)}
+
+
+@gemm_epilogue(
+    outputs=("postact",),
+    ops={"alpha": Scalar("alpha")},
+    mode="acc_pair",
+)
+def alpha_swiglu_preact_epi(acc: EpiValue, alpha: EpiValue) -> EpiOut:
+    scaled = acc * alpha
+    gate, up = unpack(scaled)
+    return {"D": scaled, "postact": swiglu(gate, up)}
