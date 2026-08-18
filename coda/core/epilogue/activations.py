@@ -7,7 +7,10 @@ from quack.epilogue.frontend import gemm_epilogue
 from quack.epilogue.ops import (
     Scalar,
     ColVecLoad,
+    ColVecReduce,
+    RowVecLoad,
 )
+
 
 EpiValue = cute.Float32 | Pair | F2
 EpiOut = dict[str, EpiValue | tuple[EpiValue, EpiValue]]
@@ -49,3 +52,25 @@ def alpha_swiglu_preact_epi(acc: EpiValue, alpha: EpiValue) -> EpiOut:
     scaled = acc * alpha
     gate, up = unpack(scaled)
     return {"D": scaled, "postact": swiglu(gate, up)}
+
+
+@gemm_epilogue(
+    outputs=("scaled_out",),
+    ops={"weight": RowVecLoad("weight")},
+    reduces={"sqsum": ColVecReduce("sqsum", scaled=True)},
+)
+def residual_sqsum_scaled_epi(acc: EpiValue, c: EpiValue, weight: EpiValue) -> EpiOut:
+    y = acc + c
+    o = y * weight
+    return {"D": y, "scaled_out": o, "sqsum": (y, y)}
+
+
+@gemm_epilogue(
+    outputs=("scaled_out",),
+    ops={"weight": RowVecLoad("weight"), "alpha": Scalar("alpha")},
+    reduces={"sqsum": ColVecReduce("sqsum", scaled=True)},
+)
+def alpha_residual_sqsum_scaled_epi(acc: EpiValue, c: EpiValue, weight: EpiValue, alpha: EpiValue) -> EpiOut:
+    y = acc * alpha + c
+    o = y * weight
+    return {"D": y, "scaled_out": o, "sqsum": (y, y)}
