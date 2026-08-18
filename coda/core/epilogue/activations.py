@@ -74,3 +74,28 @@ def alpha_residual_sqsum_scaled_epi(acc: EpiValue, c: EpiValue, weight: EpiValue
     y = acc * alpha + c
     o = y * weight
     return {"D": y, "scaled_out": o, "sqsum": (y, y)}
+
+
+@gemm_epilogue(
+    outputs=("postact",),
+    reduces={"zdz": ColVecReduce("zdz")},
+    mode="packed_cd_b16x2",
+)
+def dswiglu_preact_zdz_epi(acc: EpiValue, c: EpiValue) -> EpiOut:
+    x, y = unpack(c)
+    dx, dy, out = dswiglu(x, y, acc)
+    zdz = dx * x + dy * y
+    return {"D": pack(dx, dy), "postact": out, "zdz": zdz}
+
+
+@gemm_epilogue(
+    outputs=("postact",),
+    ops={"scale": Scalar("scale")},
+    reduces={"zdz": ColVecReduce("zdz")},
+    mode="packed_cd_b16x2",
+)
+def dswiglu_preact_zdz_scaled_epi(acc: EpiValue, c: EpiValue, scale: EpiValue) -> EpiOut:
+    x, y = unpack(c)
+    dx, dy, out = dswiglu(x, y, acc)
+    zdz = (dx * x + dy * y) * scale
+    return {"D": pack(dx, dy), "postact": out, "zdz": zdz}
